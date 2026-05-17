@@ -37,6 +37,14 @@ final class ProxyManager: ObservableObject {
 
         logger.info("Starting proxy on \(self.config.host):\(self.config.port)")
 
+        // Persist the exact config we're about to run with. This guarantees
+        // that the `secret` the proxy listens on at runtime is the same one
+        // we'll advertise in the tg:// link AND the same one we'll load on
+        // the next cold start — otherwise the secret rotates per launch and
+        // any proxy entry the user already added in Telegram immediately
+        // starts producing only "Bad" handshakes.
+        config.save()
+
         // Background keep-alive (silent audio + location + UIBackgroundTask).
         BackgroundKeeper.shared.start()
 

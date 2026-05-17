@@ -58,11 +58,19 @@ struct ProxyConfig: Codable {
     ]
 
     static func load() -> ProxyConfig {
-        guard let data = UserDefaults.standard.data(forKey: "proxyConfig"),
-              let config = try? JSONDecoder().decode(ProxyConfig.self, from: data) else {
-            return ProxyConfig()
+        if let data = UserDefaults.standard.data(forKey: "proxyConfig"),
+           let config = try? JSONDecoder().decode(ProxyConfig.self, from: data) {
+            return config
         }
-        return config
+        // First launch (or stored config from an incompatible old build):
+        // generate a fresh ProxyConfig AND persist it immediately, otherwise
+        // every subsequent cold start would regenerate `secret` and the
+        // proxy entry the user already added in Telegram (with the old
+        // secret) would no longer decrypt — every handshake would fail as
+        // "Bad" and traffic would never reach Telegram.
+        let fresh = ProxyConfig()
+        fresh.save()
+        return fresh
     }
 
     func save() {
