@@ -20,6 +20,7 @@ final class BackgroundKeeper {
     private var audioEngine = AVAudioEngine()
     private var audioPlayer: AVAudioPlayerNode?
     private var bgTaskID: UIBackgroundTaskIdentifier = .invalid
+    private var interruptionObserver: NSObjectProtocol?
     private(set) var isRunning = false
 
     // MARK: - Public API
@@ -157,33 +158,29 @@ final class BackgroundKeeper {
     // MARK: - Audio session interruption handling
 
     private func registerInterruptionObserver() {
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(handleAudioInterruption(_:)),
-            name: AVAudioSession.interruptionNotification,
-            object: AVAudioSession.sharedInstance()
-        )
+        interruptionObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.interruptionNotification,
+            object: AVAudioSession.sharedInstance(),
+            queue: nil
+        ) { [weak self] notification in
+            guard let userInfo = notification.userInfo,
+                  let typeRaw = userInfo[AVAudioSessionInterruptionTypeKey] as? UInt,
+                  let type = AVAudioSession.InterruptionType(rawValue: typeRaw) else { return }
+
+            if type == .ended {
+                Task { @MainActor [weak self] in
+                    guard let self, self.isRunning else { return }
+                    logger.info("Audio interruption ended, reactivating")
+                    self.reactivateAudioSession()
+                }
+            }
+        }
     }
 
     private func removeInterruptionObserver() {
-        NotificationCenter.default.removeObserver(
-            self,
-            name: AVAudioSession.interruptionNotification,
-            object: AVAudioSession.sharedInstance()
-        )
-    }
-
-    @objc nonisolated private func handleAudioInterruption(_ notification: Notification) {
-        guard let userInfo = notification.userInfo,
-              let typeRaw = userInfo[AVAudioSessionInterruptionTypeKey] as? UInt,
-              let type = AVAudioSession.InterruptionType(rawValue: typeRaw) else { return }
-
-        if type == .ended {
-            Task { @MainActor in
-                guard self.isRunning else { return }
-                logger.info("Audio interruption ended, reactivating")
-                self.reactivateAudioSession()
-            }
+        if let observer = interruptionObserver {
+            NotificationCenter.default.removeObserver(observer)
+            interruptionObserver = nil
         }
     }
 
