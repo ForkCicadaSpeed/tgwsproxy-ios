@@ -39,13 +39,13 @@ jobs:
             TgWsProxy/Sources/ContentView.swift
             TgWsProxy/Sources/SettingsView.swift
             TgWsProxy/Sources/ProxyConfig.swift
+            TgWsProxy/Sources/ProxyStats.swift
             TgWsProxy/Sources/ProxyManager.swift
             TgWsProxy/Sources/Crypto.swift
             TgWsProxy/Sources/RawWebSocket.swift
             TgWsProxy/Sources/MTProtoHandshake.swift
             TgWsProxy/Sources/MTProtoProxyServer.swift
             TgWsProxy/Sources/LiveActivityManager.swift
-            TgWsProxy/Sources/BackgroundKeeper.swift
           )
 
           swiftc -typecheck \
@@ -53,6 +53,25 @@ jobs:
             -sdk "$SDK" \
             -module-name TgWsProxy \
             "${MAIN_SOURCES[@]}"
+
+      - name: Typecheck PacketTunnel extension sources
+        working-directory: ios-app
+        run: |
+          set -euo pipefail
+          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+
+          swiftc -typecheck \
+            -target arm64-apple-ios17.0 \
+            -sdk "$SDK" \
+            -module-name TgWsProxyTunnel \
+            TgWsProxy/Tunnel/PacketTunnelProvider.swift \
+            TgWsProxy/Tunnel/TunnelMain.swift \
+            TgWsProxy/Sources/ProxyConfig.swift \
+            TgWsProxy/Sources/ProxyStats.swift \
+            TgWsProxy/Sources/Crypto.swift \
+            TgWsProxy/Sources/RawWebSocket.swift \
+            TgWsProxy/Sources/MTProtoHandshake.swift \
+            TgWsProxy/Sources/MTProtoProxyServer.swift
 
       - name: Typecheck LiveActivity extension sources
         working-directory: ios-app
