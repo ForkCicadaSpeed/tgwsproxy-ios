@@ -27,6 +27,7 @@ final class MTProtoProxyServer {
         tcpOptions.noDelay = true
 
         let params = NWParameters(tls: nil, tcp: tcpOptions)
+        params.allowLocalEndpointReuse = true
 
         let port = NWEndpoint.Port(rawValue: UInt16(config.port))!
         listener = try NWListener(using: params, on: port)
