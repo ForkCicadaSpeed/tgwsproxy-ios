@@ -21,7 +21,7 @@ final class BackgroundKeeper: NSObject, CLLocationManagerDelegate {
     static let shared = BackgroundKeeper()
 
     private let locationManager = CLLocationManager()
-    private let audioEngine = AVAudioEngine()
+    private var audioEngine = AVAudioEngine()
     private var audioPlayer: AVAudioPlayerNode?
     private var bgTaskID: UIBackgroundTaskIdentifier = .invalid
     private(set) var isRunning = false
@@ -63,6 +63,7 @@ final class BackgroundKeeper: NSObject, CLLocationManagerDelegate {
         guard isRunning else { return }
         let session = AVAudioSession.sharedInstance()
         do {
+            try session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
             try session.setActive(true, options: [])
             if !(audioPlayer?.isPlaying ?? false) {
                 logger.info("Audio player was stopped, restarting silent audio")
@@ -152,7 +153,9 @@ final class BackgroundKeeper: NSObject, CLLocationManagerDelegate {
 
     private func stopSilentAudio() {
         audioPlayer?.stop()
-        if audioEngine.isRunning { audioEngine.stop() }
+        audioEngine.stop()
+        audioEngine.reset()
+        audioEngine = AVAudioEngine()
         audioPlayer = nil
         try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
     }

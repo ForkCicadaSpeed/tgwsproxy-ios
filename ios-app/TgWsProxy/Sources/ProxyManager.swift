@@ -39,15 +39,6 @@ final class ProxyManager: ObservableObject {
         "tg://proxy?server=\(config.host)&port=\(config.port)&secret=dd\(config.secret)"
     }
 
-    private init() {
-        if UserDefaults.standard.bool(forKey: "proxyShouldBeRunning") {
-            logger.info("Cold start: proxy was running before, auto-starting")
-            Task { @MainActor in
-                self.startProxy()
-            }
-        }
-    }
-
     func startProxy() {
         guard !isRunning else { return }
 
@@ -140,15 +131,16 @@ final class ProxyManager: ObservableObject {
     }
 
     func handleBecameActive() {
-        guard shouldBeRunning else { return }
-        BackgroundKeeper.shared.reactivateAudioSession()
-        if !isRunning || server == nil || !server!.isListenerReady {
-            logger.info("Returning to foreground, proxy needs restart")
-            isRunning = false
-            server?.stop()
-            server = nil
-            restartAttempts = 0
-            startProxy()
+        if shouldBeRunning {
+            BackgroundKeeper.shared.reactivateAudioSession()
+            if !isRunning || server == nil || !server!.isListenerReady {
+                logger.info("Returning to foreground, proxy needs restart")
+                isRunning = false
+                server?.stop()
+                server = nil
+                restartAttempts = 0
+                startProxy()
+            }
         }
     }
 
