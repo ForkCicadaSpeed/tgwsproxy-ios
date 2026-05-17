@@ -12,6 +12,7 @@ struct SettingsView: View {
     @State private var bufferKB: String = ""
     @State private var poolSize: String = ""
     @State private var verbose: Bool = false
+    @State private var cfWorkerDomain: String = ""
     @State private var showError: String? = nil
 
     var body: some View {
@@ -42,6 +43,19 @@ struct SettingsView: View {
                             Image(systemName: "arrow.clockwise")
                         }
                     }
+                }
+
+                Section {
+                    TextField("random-name.username.workers.dev", text: $cfWorkerDomain)
+                        .monospaced()
+                        .font(.system(.caption, design: .monospaced))
+                        .autocorrectionDisabled()
+                        .textInputAutocapitalization(.never)
+                } header: {
+                    Text("Cloudflare Worker (для РФ)")
+                } footer: {
+                    Text("Если пусто — пойдём напрямую к Telegram WS edge (в РФ почти всегда блокируется DPI/RST). Чтобы это работало внутри РФ, разверни свой Cloudflare Worker по инструкции из docs/CfWorker.md референса и вставь его домен сюда.")
+                        .font(.caption2)
                 }
 
                 Section("Датацентры (DC → IP)") {
@@ -108,6 +122,7 @@ struct SettingsView: View {
         bufferKB = "\(cfg.bufferSizeKB)"
         poolSize = "\(cfg.poolSize)"
         verbose = cfg.verbose
+        cfWorkerDomain = cfg.cfWorkerDomain
     }
 
     private func save() {
@@ -140,6 +155,8 @@ struct SettingsView: View {
         cfg.bufferSizeKB = Int(bufferKB) ?? 256
         cfg.poolSize = Int(poolSize) ?? 4
         cfg.verbose = verbose
+        cfg.cfWorkerDomain = cfWorkerDomain
+            .trimmingCharacters(in: .whitespacesAndNewlines)
 
         proxy.config = cfg
         proxy.saveConfig()

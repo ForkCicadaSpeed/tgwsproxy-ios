@@ -82,11 +82,30 @@ struct ContentView: View {
                 Spacer()
             }
             HStack(spacing: 16) {
-                statItem("Подключений", value: "\(proxy.stats.connectionsActive)")
+                statItem(
+                    "Подключений",
+                    value: "\(proxy.stats.connectionsActive)/\(proxy.stats.connectionsTotal)"
+                )
                 statItem("WS", value: "\(proxy.stats.connectionsWS)")
                 statItem("↑", value: formatBytes(proxy.stats.bytesUp))
                 statItem("↓", value: formatBytes(proxy.stats.bytesDown))
             }
+            // Diagnostic row — exposes why a session might not flow.
+            // If connectionsTotal > 0 but WS == 0 and wsErrors > 0, the
+            // upstream WS handshake is failing (RF blocks direct Telegram
+            // WS edges; configure a Cloudflare Worker in settings).
+            // bad = client handshake failed (wrong secret / not MTProto).
+            // tcpFB = WS failed but a direct-TCP fallback path took over.
+            HStack(spacing: 16) {
+                statItem("WS err", value: "\(proxy.stats.wsErrors)")
+                statItem("Bad", value: "\(proxy.stats.connectionsBad)")
+                statItem("TCP FB", value: "\(proxy.stats.connectionsTCPFallback)")
+                statItem(
+                    "CF",
+                    value: proxy.config.cfWorkerDomain.isEmpty ? "off" : "on"
+                )
+            }
+            .opacity(0.85)
         }
         .padding()
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))

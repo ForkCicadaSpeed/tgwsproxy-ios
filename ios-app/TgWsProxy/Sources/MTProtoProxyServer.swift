@@ -158,13 +158,35 @@ final class MTProtoProxyServer {
             return
         }
 
-        let domains = wsDomains(dc: result.dcId, isMedia: result.isMedia, overrides: config.dcOverrides)
+        // Build the list of (ip, domain, path) tuples to try.
+        // When a Cloudflare Worker domain is configured (recommended for
+        // restricted regions like RF where direct Telegram WS IPs are
+        // RST-injected), we go through the Worker first; otherwise direct.
+        struct WsTarget { let ip: String; let domain: String; let path: String }
+        var targets: [WsTarget] = []
+
+        let workerDomain = config.cfWorkerDomain.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !workerDomain.isEmpty {
+            // CF Worker bridges WS frames to a raw TCP socket to the
+            // requested `dst` IP, port 443. We resolve the worker domain
+            // through DNS by connecting to it by name.
+            targets.append(WsTarget(
+                ip: workerDomain,
+                domain: workerDomain,
+                path: "/apiws?dst=\(targetIP)"
+            ))
+        } else {
+            let domains = wsDomains(dc: result.dcId, isMedia: result.isMedia, overrides: config.dcOverrides)
+            for d in domains {
+                targets.append(WsTarget(ip: targetIP, domain: d, path: "/apiws"))
+            }
+        }
 
         var ws: RawWebSocket? = nil
-        for domain in domains {
-            logger.info("DC\(result.dcId)\(mediaTag) -> wss://\(domain)/apiws via \(targetIP)")
+        for t in targets {
+            logger.info("DC\(result.dcId)\(mediaTag) -> wss://\(t.domain)\(t.path) via \(t.ip)")
             do {
-                ws = try await RawWebSocket.connect(ip: targetIP, domain: domain, timeout: 10)
+                ws = try await RawWebSocket.connect(ip: t.ip, domain: t.domain, path: t.path, timeout: 10)
                 break
             } catch let error as WsHandshakeError where error.isRedirect {
                 logger.warning("DC\(result.dcId)\(mediaTag) got \(error.statusCode) redirect")
