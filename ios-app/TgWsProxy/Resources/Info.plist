@@ -43,6 +43,32 @@
         <key>UIApplicationSupportsMultipleScenes</key>
         <false/>
     </dict>
+    <key>CFBundleIcons</key>
+    <dict>
+        <key>CFBundlePrimaryIcon</key>
+        <dict>
+            <key>CFBundleIconFiles</key>
+            <array>
+                <string>icon-60</string>
+            </array>
+            <key>UIPrerenderedIcon</key>
+            <false/>
+        </dict>
+    </dict>
+    <key>CFBundleIcons~ipad</key>
+    <dict>
+        <key>CFBundlePrimaryIcon</key>
+        <dict>
+            <key>CFBundleIconFiles</key>
+            <array>
+                <string>icon-60</string>
+                <string>icon-76</string>
+                <string>icon-83.5</string>
+            </array>
+            <key>UIPrerenderedIcon</key>
+            <false/>
+        </dict>
+    </dict>
     <key>NSSupportsLiveActivities</key>
     <true/>
     <key>NSSupportsLiveActivitiesFrequentUpdates</key>

@@ -27,6 +27,7 @@ final class ProxyManager: ObservableObject {
     @Published var config = ProxyConfig.load()
 
     private var server: MTProtoProxyServer?
+    private var shouldBeRunning = false
 
     var tgLink: String {
         "tg://proxy?server=\(config.host)&port=\(config.port)&secret=dd\(config.secret)"
@@ -37,18 +38,11 @@ final class ProxyManager: ObservableObject {
 
         logger.info("Starting proxy on \(self.config.host):\(self.config.port)")
 
-        // Persist the exact config we're about to run with. This guarantees
-        // that the `secret` the proxy listens on at runtime is the same one
-        // we'll advertise in the tg:// link AND the same one we'll load on
-        // the next cold start — otherwise the secret rotates per launch and
-        // any proxy entry the user already added in Telegram immediately
-        // starts producing only "Bad" handshakes.
         config.save()
+        shouldBeRunning = true
 
-        // Background keep-alive (silent audio + location + UIBackgroundTask).
         BackgroundKeeper.shared.start()
 
-        // Live Activity on Dynamic Island / Lock Screen.
         LiveActivityManager.shared.startActivity(
             host: config.host,
             port: config.port,
@@ -66,6 +60,18 @@ final class ProxyManager: ObservableObject {
                     bytesUp: newStats.bytesUp,
                     bytesDown: newStats.bytesDown
                 )
+            }
+        }, onListenerFailed: { [weak self] in
+            Task { @MainActor in
+                guard let self else { return }
+                logger.warning("Listener failed, will attempt restart")
+                self.isRunning = false
+                self.server?.stop()
+                self.server = nil
+                if self.shouldBeRunning {
+                    try? await Task.sleep(nanoseconds: 500_000_000)
+                    self.startProxy()
+                }
             }
         })
 
@@ -85,8 +91,10 @@ final class ProxyManager: ObservableObject {
     }
 
     func stopProxy() {
-        guard isRunning else { return }
+        guard isRunning || shouldBeRunning else { return }
         logger.info("Stopping proxy")
+
+        shouldBeRunning = false
 
         BackgroundKeeper.shared.stop()
         LiveActivityManager.shared.stopActivity()
@@ -95,6 +103,18 @@ final class ProxyManager: ObservableObject {
         server = nil
         isRunning = false
         stats = ProxyStats()
+    }
+
+    func handleBecameActive() {
+        guard shouldBeRunning else { return }
+        BackgroundKeeper.shared.reactivateAudioSession()
+        if server == nil || !server!.isListenerReady {
+            logger.info("Proxy was running but listener died, restarting")
+            isRunning = false
+            server?.stop()
+            server = nil
+            startProxy()
+        }
     }
 
     func saveConfig() {

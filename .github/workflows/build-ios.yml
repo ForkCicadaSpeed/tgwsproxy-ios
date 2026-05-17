@@ -113,6 +113,9 @@ jobs:
           cp TgWsProxy/Resources/TgWsProxy.entitlements "$APP_DIR/TgWsProxy.entitlements"
           echo -n "APPL????" > "$APP_DIR/PkgInfo"
 
+          # Copy app icons
+          cp TgWsProxy/Resources/AppIcon/*.png "$APP_DIR/"
+
           echo "App bundle structure:"
           find "$APP_DIR" -type f | sort
 

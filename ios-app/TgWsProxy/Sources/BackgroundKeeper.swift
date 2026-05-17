@@ -42,6 +42,7 @@ final class BackgroundKeeper: NSObject, CLLocationManagerDelegate {
         isRunning = true
         logger.info("BackgroundKeeper start")
 
+        registerInterruptionObserver()
         startBackgroundTask()
         startSilentAudio()
         startLocation()
@@ -52,9 +53,26 @@ final class BackgroundKeeper: NSObject, CLLocationManagerDelegate {
         isRunning = false
         logger.info("BackgroundKeeper stop")
 
+        removeInterruptionObserver()
         stopSilentAudio()
         stopLocation()
         endBackgroundTask()
+    }
+
+    func reactivateAudioSession() {
+        guard isRunning else { return }
+        let session = AVAudioSession.sharedInstance()
+        do {
+            try session.setActive(true, options: [])
+            if !(audioPlayer?.isPlaying ?? false) {
+                logger.info("Audio player was stopped, restarting silent audio")
+                stopSilentAudio()
+                startSilentAudio()
+            }
+        } catch {
+            logger.warning("Failed to reactivate audio session: \(error.localizedDescription)")
+        }
+        startBackgroundTask()
     }
 
     // MARK: - UIApplication background task
@@ -137,6 +155,39 @@ final class BackgroundKeeper: NSObject, CLLocationManagerDelegate {
         if audioEngine.isRunning { audioEngine.stop() }
         audioPlayer = nil
         try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
+    }
+
+    // MARK: - Audio session interruption handling
+
+    private func registerInterruptionObserver() {
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleAudioInterruption(_:)),
+            name: AVAudioSession.interruptionNotification,
+            object: AVAudioSession.sharedInstance()
+        )
+    }
+
+    private func removeInterruptionObserver() {
+        NotificationCenter.default.removeObserver(
+            self,
+            name: AVAudioSession.interruptionNotification,
+            object: AVAudioSession.sharedInstance()
+        )
+    }
+
+    @objc nonisolated private func handleAudioInterruption(_ notification: Notification) {
+        guard let userInfo = notification.userInfo,
+              let typeRaw = userInfo[AVAudioSessionInterruptionTypeKey] as? UInt,
+              let type = AVAudioSession.InterruptionType(rawValue: typeRaw) else { return }
+
+        if type == .ended {
+            Task { @MainActor in
+                guard self.isRunning else { return }
+                logger.info("Audio interruption ended, reactivating")
+                self.reactivateAudioSession()
+            }
+        }
     }
 
     // MARK: - Background location (secondary keep-alive)

@@ -406,6 +406,7 @@ jobs:
           cp TgWsProxy/Resources/Info.plist "$APP_DIR/Info.plist"
           cp TgWsProxy/Resources/TgWsProxy.entitlements "$APP_DIR/TgWsProxy.entitlements"
           echo -n "APPL????" > "$APP_DIR/PkgInfo"
+          cp TgWsProxy/Resources/AppIcon/*.png "$APP_DIR/"
           cd build
           zip -r -q ../TgWsProxy_ios_unsigned.ipa Payload/
 

@@ -11,11 +11,15 @@ final class MTProtoProxyServer {
     private let config: ProxyConfig
     private var listener: NWListener?
     private var statsCallback: ((ProxyStats) -> Void)?
+    private var onListenerFailed: (() -> Void)?
     private let statsActor = StatsActor()
+    private(set) var isListenerReady = false
 
-    init(config: ProxyConfig, statsCallback: ((ProxyStats) -> Void)? = nil) {
+    init(config: ProxyConfig, statsCallback: ((ProxyStats) -> Void)? = nil,
+         onListenerFailed: (() -> Void)? = nil) {
         self.config = config
         self.statsCallback = statsCallback
+        self.onListenerFailed = onListenerFailed
     }
 
     func start() async throws {
@@ -35,21 +39,34 @@ final class MTProtoProxyServer {
         }
 
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+            var resumed = false
             listener?.stateUpdateHandler = { [weak self] state in
                 switch state {
                 case .ready:
-                    self?.listener?.stateUpdateHandler = nil
-                    logger.info("Proxy server listening on port \(self?.config.port ?? 0)")
-                    cont.resume()
+                    self?.isListenerReady = true
+                    if !resumed {
+                        resumed = true
+                        logger.info("Proxy server listening on port \(self?.config.port ?? 0)")
+                        cont.resume()
+                    }
 
                 case .failed(let error):
-                    self?.listener?.stateUpdateHandler = nil
-                    logger.error("Listener failed: \(error)")
-                    cont.resume(throwing: error)
+                    self?.isListenerReady = false
+                    if !resumed {
+                        resumed = true
+                        logger.error("Listener failed: \(error)")
+                        cont.resume(throwing: error)
+                    } else {
+                        logger.error("Listener failed after ready: \(error)")
+                        self?.onListenerFailed?()
+                    }
 
                 case .cancelled:
-                    self?.listener?.stateUpdateHandler = nil
-                    cont.resume(throwing: CancellationError())
+                    self?.isListenerReady = false
+                    if !resumed {
+                        resumed = true
+                        cont.resume(throwing: CancellationError())
+                    }
 
                 default:
                     break
@@ -69,6 +86,7 @@ final class MTProtoProxyServer {
     }
 
     func stop() {
+        isListenerReady = false
         listener?.cancel()
         listener = nil
     }
