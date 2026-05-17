@@ -108,12 +108,12 @@ final class ProxyManager: ObservableObject {
                 logger.error("Failed to start proxy: \(error.localizedDescription)")
                 isRunning = false
                 server = nil
-                if shouldBeRunning && restartAttempts < ProxyManager.maxRestartAttempts {
-                    restartAttempts += 1
-                    let delay = UInt64(restartAttempts) * 1_000_000_000
-                    logger.info("Retrying start in \(restartAttempts)s (attempt \(restartAttempts))")
+                if self.shouldBeRunning && self.restartAttempts < ProxyManager.maxRestartAttempts {
+                    self.restartAttempts += 1
+                    let delay = UInt64(self.restartAttempts) * 1_000_000_000
+                    logger.info("Retrying start in \(self.restartAttempts)s (attempt \(self.restartAttempts))")
                     try? await Task.sleep(nanoseconds: delay)
-                    startProxy()
+                    self.startProxy()
                 } else {
                     shouldBeRunning = false
                     BackgroundKeeper.shared.stop()
