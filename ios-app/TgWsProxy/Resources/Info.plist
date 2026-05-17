@@ -74,10 +74,10 @@
     <key>NSSupportsLiveActivitiesFrequentUpdates</key>
     <true/>
 
-    <!-- Background execution modes used by BackgroundKeeper -->
+    <!-- Background execution: VPN tunnel keeps proxy alive -->
     <key>UIBackgroundModes</key>
     <array>
-        <string>audio</string>
+        <string>network-authentication</string>
     </array>
 </dict>
 </plist>

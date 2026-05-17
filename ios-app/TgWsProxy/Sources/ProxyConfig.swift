@@ -2,6 +2,8 @@ import Foundation
 import Security
 
 struct ProxyConfig: Codable {
+    static let appGroupID = "group.com.tgwsproxy.app"
+
     var host: String = "127.0.0.1"
     var port: Int = 1443
     var secret: String = ProxyConfig.generateSecret()
@@ -57,17 +59,22 @@ struct ProxyConfig: Codable {
         203: "91.105.192.100"
     ]
 
+    private static var groupDefaults: UserDefaults {
+        UserDefaults(suiteName: appGroupID) ?? UserDefaults.standard
+    }
+
     static func load() -> ProxyConfig {
-        if let data = UserDefaults.standard.data(forKey: "proxyConfig"),
+        // Try app group first (shared with tunnel extension)
+        if let data = groupDefaults.data(forKey: "proxyConfig"),
            let config = try? JSONDecoder().decode(ProxyConfig.self, from: data) {
             return config
         }
-        // First launch (or stored config from an incompatible old build):
-        // generate a fresh ProxyConfig AND persist it immediately, otherwise
-        // every subsequent cold start would regenerate `secret` and the
-        // proxy entry the user already added in Telegram (with the old
-        // secret) would no longer decrypt — every handshake would fail as
-        // "Bad" and traffic would never reach Telegram.
+        // Migrate from standard UserDefaults (pre-VPN builds)
+        if let data = UserDefaults.standard.data(forKey: "proxyConfig"),
+           let config = try? JSONDecoder().decode(ProxyConfig.self, from: data) {
+            config.save()
+            return config
+        }
         let fresh = ProxyConfig()
         fresh.save()
         return fresh
@@ -75,6 +82,7 @@ struct ProxyConfig: Codable {
 
     func save() {
         if let data = try? JSONEncoder().encode(self) {
+            ProxyConfig.groupDefaults.set(data, forKey: "proxyConfig")
             UserDefaults.standard.set(data, forKey: "proxyConfig")
         }
     }

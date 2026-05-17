@@ -1,4 +1,5 @@
 import SwiftUI
+import NetworkExtension
 
 @available(iOS 17.0, *)
 struct ContentView: View {
@@ -60,7 +61,7 @@ struct ContentView: View {
                 .foregroundStyle(proxy.isRunning ? .green : .secondary)
                 .symbolEffect(.pulse, isActive: proxy.isRunning)
 
-            Text(proxy.isRunning ? "Прокси активен" : "Прокси остановлен")
+            Text(vpnStatusText)
                 .font(.headline)
                 .foregroundStyle(proxy.isRunning ? .primary : .secondary)
 
@@ -171,6 +172,21 @@ struct ContentView: View {
         }
     }
 
+    private var vpnStatusText: String {
+        switch proxy.vpnStatus {
+        case .connected: return "Прокси активен (VPN)"
+        case .connecting: return "Подключение..."
+        case .disconnecting: return "Отключение..."
+        case .reasserting: return "Переподключение..."
+        case .invalid: return "VPN не настроен"
+        default: return "Прокси остановлен"
+        }
+    }
+
+    private var isTransitioning: Bool {
+        proxy.vpnStatus == .connecting || proxy.vpnStatus == .disconnecting || proxy.vpnStatus == .reasserting
+    }
+
     private var startStopButton: some View {
         Button {
             if proxy.isRunning {
@@ -180,7 +196,11 @@ struct ContentView: View {
             }
         } label: {
             HStack {
-                Image(systemName: proxy.isRunning ? "stop.fill" : "play.fill")
+                if isTransitioning {
+                    ProgressView().tint(.white)
+                } else {
+                    Image(systemName: proxy.isRunning ? "stop.fill" : "play.fill")
+                }
                 Text(proxy.isRunning ? "Остановить" : "Запустить")
                     .fontWeight(.semibold)
             }
@@ -190,6 +210,7 @@ struct ContentView: View {
         .buttonStyle(.borderedProminent)
         .tint(proxy.isRunning ? .red : .green)
         .controlSize(.large)
+        .disabled(isTransitioning)
     }
 
     private func formatBytes(_ bytes: UInt64) -> String {

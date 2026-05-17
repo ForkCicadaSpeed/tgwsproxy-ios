@@ -40,13 +40,13 @@ jobs:
             TgWsProxy/Sources/ContentView.swift
             TgWsProxy/Sources/SettingsView.swift
             TgWsProxy/Sources/ProxyConfig.swift
+            TgWsProxy/Sources/ProxyStats.swift
             TgWsProxy/Sources/ProxyManager.swift
             TgWsProxy/Sources/Crypto.swift
             TgWsProxy/Sources/RawWebSocket.swift
             TgWsProxy/Sources/MTProtoHandshake.swift
             TgWsProxy/Sources/MTProtoProxyServer.swift
             TgWsProxy/Sources/LiveActivityManager.swift
-            TgWsProxy/Sources/BackgroundKeeper.swift
           )
 
           echo "Compiling ${#SOURCES[@]} Swift files..."
@@ -63,10 +63,9 @@ jobs:
             -framework SwiftUI \
             -framework UIKit \
             -framework Network \
+            -framework NetworkExtension \
             -framework ActivityKit \
             -framework WidgetKit \
-            -framework CoreLocation \
-            -framework AVFoundation \
             "${SOURCES[@]}"
 
           strip -x build/Payload/TgWsProxy.app/TgWsProxy
@@ -79,8 +78,6 @@ jobs:
           EXTENSION_DIR="build/Payload/TgWsProxy.app/PlugIns/TgWsProxyLiveActivity.appex"
           mkdir -p "$EXTENSION_DIR"
 
-          # LiveActivity extension only needs the attributes type, but we
-          # compile the manager file too because that's where the type lives.
           swiftc \
             -target arm64-apple-ios17.0 \
             -sdk "$SDK" \
@@ -97,10 +94,46 @@ jobs:
             TgWsProxy/LiveActivity/ProxyLiveActivity.swift
 
           strip -x "$EXTENSION_DIR/TgWsProxyLiveActivity" 2>/dev/null || true
-
-          # Copy extension Info.plist
           cp TgWsProxy/LiveActivity/Info.plist "$EXTENSION_DIR/Info.plist"
           echo "LiveActivity extension compiled successfully."
+
+      - name: Compile PacketTunnel extension
+        working-directory: ios-app
+        run: |
+          set -euo pipefail
+          TUNNEL_DIR="build/Payload/TgWsProxy.app/PlugIns/TgWsProxyTunnel.appex"
+          mkdir -p "$TUNNEL_DIR"
+
+          # Shared sources needed by the tunnel extension
+          SHARED=(
+            TgWsProxy/Sources/ProxyConfig.swift
+            TgWsProxy/Sources/ProxyStats.swift
+            TgWsProxy/Sources/Crypto.swift
+            TgWsProxy/Sources/RawWebSocket.swift
+            TgWsProxy/Sources/MTProtoHandshake.swift
+            TgWsProxy/Sources/MTProtoProxyServer.swift
+          )
+
+          swiftc \
+            -target arm64-apple-ios17.0 \
+            -sdk "$SDK" \
+            -O \
+            -whole-module-optimization \
+            -module-name TgWsProxyTunnel \
+            -emit-executable \
+            -o "$TUNNEL_DIR/TgWsProxyTunnel" \
+            -framework Foundation \
+            -framework NetworkExtension \
+            -framework Network \
+            -framework Security \
+            TgWsProxy/Tunnel/PacketTunnelProvider.swift \
+            TgWsProxy/Tunnel/TunnelMain.swift \
+            "${SHARED[@]}"
+
+          strip -x "$TUNNEL_DIR/TgWsProxyTunnel" 2>/dev/null || true
+          cp TgWsProxy/Tunnel/Info.plist "$TUNNEL_DIR/Info.plist"
+          cp TgWsProxy/Tunnel/TgWsProxyTunnel.entitlements "$TUNNEL_DIR/TgWsProxyTunnel.entitlements"
+          echo "PacketTunnel extension compiled successfully."
 
       - name: Assemble app bundle
         working-directory: ios-app
@@ -108,13 +141,18 @@ jobs:
           set -euo pipefail
           APP_DIR="build/Payload/TgWsProxy.app"
 
-          # Copy main app Info.plist & entitlements
           cp TgWsProxy/Resources/Info.plist "$APP_DIR/Info.plist"
           cp TgWsProxy/Resources/TgWsProxy.entitlements "$APP_DIR/TgWsProxy.entitlements"
           echo -n "APPL????" > "$APP_DIR/PkgInfo"
-
-          # Copy app icons
           cp TgWsProxy/Resources/AppIcon/*.png "$APP_DIR/"
+
+          # Ad-hoc sign main app and extensions with entitlements
+          codesign --force --sign - \
+            --entitlements TgWsProxy/Resources/TgWsProxy.entitlements \
+            "$APP_DIR/TgWsProxy"
+          codesign --force --sign - \
+            --entitlements TgWsProxy/Tunnel/TgWsProxyTunnel.entitlements \
+            "$APP_DIR/PlugIns/TgWsProxyTunnel.appex/TgWsProxyTunnel"
 
           echo "App bundle structure:"
           find "$APP_DIR" -type f | sort
