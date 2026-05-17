@@ -220,7 +220,15 @@ final class MTProtoProxyServer {
                 do {
                     while true {
                         let chunk = try await self.receiveData(connection, maxLength: 65536)
-                        guard !chunk.isEmpty else { break }
+                        if chunk.isEmpty {
+                            // EOF from client: drain any pending bytes the
+                            // splitter is still holding (one final WS frame).
+                            let tail = splitter.flush()
+                            if let last = tail.first {
+                                try? await ws.send(last)
+                            }
+                            break
+                        }
 
                         await self.statsActor.update { $0.bytesUp += UInt64(chunk.count) }
 
