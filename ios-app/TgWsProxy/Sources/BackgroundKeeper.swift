@@ -115,6 +115,10 @@ final class BackgroundKeeper: NSObject, CLLocationManagerDelegate {
         let mainMixer = audioEngine.mainMixerNode
         let format = mainMixer.outputFormat(forBus: 0)
         let sampleRate = format.sampleRate
+        guard sampleRate > 0 else {
+            logger.warning("Invalid audio format (sampleRate=0), skipping silent audio")
+            return
+        }
         let frameCount = AVAudioFrameCount(sampleRate * 2) // 2 seconds of buffer
 
         guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount) else {

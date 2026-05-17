@@ -131,17 +131,16 @@ final class ProxyManager: ObservableObject {
     }
 
     func handleBecameActive() {
-        if shouldBeRunning {
-            BackgroundKeeper.shared.reactivateAudioSession()
-            if !isRunning || server == nil || !server!.isListenerReady {
-                logger.info("Returning to foreground, proxy needs restart")
-                isRunning = false
-                server?.stop()
-                server = nil
-                restartAttempts = 0
-                startProxy()
-            }
-        }
+        guard shouldBeRunning else { return }
+        BackgroundKeeper.shared.reactivateAudioSession()
+        // Always force-restart: after iOS suspends the app the NWListener
+        // is dead but isListenerReady stays true (stale state).
+        logger.info("Returning to foreground, force-restarting proxy")
+        server?.stop()
+        server = nil
+        isRunning = false
+        restartAttempts = 0
+        startProxy()
     }
 
     func saveConfig() {
