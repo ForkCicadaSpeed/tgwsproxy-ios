@@ -29,6 +29,7 @@ final class ProxyManager: ObservableObject {
     private var server: MTProtoProxyServer?
     private var restartAttempts = 0
     private static let maxRestartAttempts = 5
+    private var startGeneration = 0
 
     private var shouldBeRunning: Bool {
         get { UserDefaults.standard.bool(forKey: "proxyShouldBeRunning") }
@@ -46,6 +47,8 @@ final class ProxyManager: ObservableObject {
 
         config.save()
         shouldBeRunning = true
+        startGeneration += 1
+        let gen = startGeneration
 
         BackgroundKeeper.shared.start()
 
@@ -58,7 +61,7 @@ final class ProxyManager: ObservableObject {
         let configSnapshot = config
         server = MTProtoProxyServer(config: configSnapshot, statsCallback: { [weak self] newStats in
             Task { @MainActor in
-                guard let self else { return }
+                guard let self, gen == self.startGeneration else { return }
                 self.stats = newStats
                 LiveActivityManager.shared.updateActivity(
                     connections: newStats.connectionsActive,
@@ -69,7 +72,7 @@ final class ProxyManager: ObservableObject {
             }
         }, onListenerFailed: { [weak self] in
             Task { @MainActor in
-                guard let self else { return }
+                guard let self, gen == self.startGeneration else { return }
                 self.isRunning = false
                 self.server?.stop()
                 self.server = nil
@@ -85,6 +88,7 @@ final class ProxyManager: ObservableObject {
                 let delay = UInt64(self.restartAttempts) * 1_000_000_000
                 logger.warning("Listener failed, restart attempt \(self.restartAttempts) in \(self.restartAttempts)s")
                 try? await Task.sleep(nanoseconds: delay)
+                guard gen == self.startGeneration else { return }
                 self.startProxy()
             }
         })
@@ -92,10 +96,12 @@ final class ProxyManager: ObservableObject {
         Task {
             do {
                 try await server?.start()
+                guard gen == self.startGeneration else { return }
                 isRunning = true
                 restartAttempts = 0
                 logger.info("Proxy started successfully")
             } catch {
+                guard gen == self.startGeneration else { return }
                 logger.error("Failed to start proxy: \(error.localizedDescription)")
                 isRunning = false
                 server = nil
@@ -104,6 +110,7 @@ final class ProxyManager: ObservableObject {
                     let delay = UInt64(self.restartAttempts) * 1_000_000_000
                     logger.info("Retrying start in \(self.restartAttempts)s (attempt \(self.restartAttempts))")
                     try? await Task.sleep(nanoseconds: delay)
+                    guard gen == self.startGeneration else { return }
                     self.startProxy()
                 } else {
                     shouldBeRunning = false
@@ -119,6 +126,7 @@ final class ProxyManager: ObservableObject {
         logger.info("Stopping proxy")
 
         shouldBeRunning = false
+        startGeneration += 1
         restartAttempts = 0
 
         BackgroundKeeper.shared.stop()

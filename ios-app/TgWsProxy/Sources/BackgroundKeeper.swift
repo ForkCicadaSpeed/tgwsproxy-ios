@@ -1,39 +1,26 @@
 import Foundation
 import AVFoundation
-import CoreLocation
 import UIKit
 import os.log
 
 private let logger = Logger(subsystem: "com.tgwsproxy.app", category: "BackgroundKeeper")
 
-// BackgroundKeeper combines several techniques so that the local MTProto
-// proxy keeps running while the app is in the background:
+// BackgroundKeeper keeps the local MTProto proxy alive in the background:
 //   1. Silent AVAudioEngine playback (UIBackgroundModes = "audio")
-//   2. Background location updates  (UIBackgroundModes = "location")
-//   3. A long UIApplication background task as an extra safety net
+//   2. A long UIApplication background task as an extra safety net
 //
 // Live Activity / Dynamic Island only shows state, it does NOT keep the
 // process alive on its own.
 
 @MainActor
 @available(iOS 17.0, *)
-final class BackgroundKeeper: NSObject, CLLocationManagerDelegate {
+final class BackgroundKeeper {
     static let shared = BackgroundKeeper()
 
-    private let locationManager = CLLocationManager()
     private var audioEngine = AVAudioEngine()
     private var audioPlayer: AVAudioPlayerNode?
     private var bgTaskID: UIBackgroundTaskIdentifier = .invalid
     private(set) var isRunning = false
-
-    private override init() {
-        super.init()
-        locationManager.delegate = self
-        locationManager.allowsBackgroundLocationUpdates = true
-        locationManager.pausesLocationUpdatesAutomatically = false
-        locationManager.desiredAccuracy = kCLLocationAccuracyThreeKilometers
-        locationManager.distanceFilter = 500
-    }
 
     // MARK: - Public API
 
@@ -45,7 +32,6 @@ final class BackgroundKeeper: NSObject, CLLocationManagerDelegate {
         registerInterruptionObserver()
         startBackgroundTask()
         startSilentAudio()
-        startLocation()
     }
 
     func stop() {
@@ -55,7 +41,6 @@ final class BackgroundKeeper: NSObject, CLLocationManagerDelegate {
 
         removeInterruptionObserver()
         stopSilentAudio()
-        stopLocation()
         endBackgroundTask()
     }
 
@@ -67,7 +52,12 @@ final class BackgroundKeeper: NSObject, CLLocationManagerDelegate {
             try session.setActive(true, options: [])
             if !(audioPlayer?.isPlaying ?? false) {
                 logger.info("Audio player was stopped, restarting silent audio")
-                stopSilentAudio()
+                // Stop engine without deactivating session
+                audioPlayer?.stop()
+                audioEngine.stop()
+                audioEngine.reset()
+                audioEngine = AVAudioEngine()
+                audioPlayer = nil
                 startSilentAudio()
             }
         } catch {
@@ -197,37 +187,4 @@ final class BackgroundKeeper: NSObject, CLLocationManagerDelegate {
         }
     }
 
-    // MARK: - Background location (secondary keep-alive)
-
-    private func startLocation() {
-        let status = locationManager.authorizationStatus
-        switch status {
-        case .notDetermined:
-            locationManager.requestWhenInUseAuthorization()
-        case .authorizedWhenInUse:
-            locationManager.requestAlwaysAuthorization()
-        default:
-            break
-        }
-        locationManager.startUpdatingLocation()
-    }
-
-    private func stopLocation() {
-        locationManager.stopUpdatingLocation()
-    }
-
-    // MARK: - CLLocationManagerDelegate
-
-    nonisolated func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
-        // No-op: we only need the OS to keep the process scheduled.
-    }
-
-    nonisolated func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
-        // Ignore — audio + UIBackgroundTask are still active.
-    }
-
-    nonisolated func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
-        // If user grants always permission while we're running, the OS will
-        // keep delivering updates automatically — nothing to do here.
-    }
 }

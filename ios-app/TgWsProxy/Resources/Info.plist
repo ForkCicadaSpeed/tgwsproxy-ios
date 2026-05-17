@@ -78,16 +78,6 @@
     <key>UIBackgroundModes</key>
     <array>
         <string>audio</string>
-        <string>location</string>
-        <string>processing</string>
     </array>
-
-    <!-- Location permissions (secondary keep-alive) -->
-    <key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
-    <string>Геолокация используется только как резервный механизм, чтобы локальный прокси не выгружался iOS, пока он активен.</string>
-    <key>NSLocationWhenInUseUsageDescription</key>
-    <string>Геолокация используется только как резервный механизм, чтобы локальный прокси не выгружался iOS, пока он активен.</string>
-    <key>NSLocationAlwaysUsageDescription</key>
-    <string>Геолокация используется только как резервный механизм, чтобы локальный прокси не выгружался iOS, пока он активен.</string>
 </dict>
 </plist>
