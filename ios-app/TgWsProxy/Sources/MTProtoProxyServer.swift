@@ -22,6 +22,11 @@ final class MTProtoProxyServer {
         self.onListenerFailed = onListenerFailed
     }
 
+    deinit {
+        listener?.cancel()
+        listener = nil
+    }
+
     func start() async throws {
         let tcpOptions = NWProtocolTCP.Options()
         tcpOptions.noDelay = true

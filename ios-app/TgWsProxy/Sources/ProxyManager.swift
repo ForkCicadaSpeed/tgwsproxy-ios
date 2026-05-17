@@ -143,8 +143,10 @@ final class ProxyManager: ObservableObject {
         BackgroundKeeper.shared.reactivateAudioSession()
         // Always force-restart: after iOS suspends the app the NWListener
         // is dead but isListenerReady stays true (stale state).
+        // Don't call server?.stop() — the stale NWListener may crash when
+        // touched after iOS froze the process. Just drop the reference and
+        // let ARC + deinit handle cleanup safely.
         logger.info("Returning to foreground, force-restarting proxy")
-        server?.stop()
         server = nil
         isRunning = false
         restartAttempts = 0
