@@ -156,13 +156,8 @@ struct ContentView: View {
         Button {
             if proxy.isRunning {
                 proxy.stopProxy()
-                LiveActivityManager.shared.stopActivity()
             } else {
                 proxy.startProxy()
-                LiveActivityManager.shared.startActivity(
-                    host: proxy.config.host,
-                    port: proxy.config.port
-                )
             }
         } label: {
             HStack {

@@ -42,12 +42,13 @@ jobs:
             TgWsProxy/Sources/MTProtoHandshake.swift
             TgWsProxy/Sources/MTProtoProxyServer.swift
             TgWsProxy/Sources/LiveActivityManager.swift
+            TgWsProxy/Sources/BackgroundKeeper.swift
           )
 
           echo "Compiling ${#SOURCES[@]} Swift files..."
 
           swiftc \
-            -target arm64-apple-ios16.1 \
+            -target arm64-apple-ios17.0 \
             -sdk "$SDK" \
             -O \
             -whole-module-optimization \
@@ -60,6 +61,8 @@ jobs:
             -framework Network \
             -framework ActivityKit \
             -framework WidgetKit \
+            -framework CoreLocation \
+            -framework AVFoundation \
             "${SOURCES[@]}"
 
           strip -x build/Payload/TgWsProxy.app/TgWsProxy
@@ -72,9 +75,10 @@ jobs:
           EXTENSION_DIR="build/Payload/TgWsProxy.app/PlugIns/TgWsProxyLiveActivity.appex"
           mkdir -p "$EXTENSION_DIR"
 
-          # LiveActivity extension needs the shared attributes type from the main app
+          # LiveActivity extension only needs the attributes type, but we
+          # compile the manager file too because that's where the type lives.
           swiftc \
-            -target arm64-apple-ios16.1 \
+            -target arm64-apple-ios17.0 \
             -sdk "$SDK" \
             -O \
             -whole-module-optimization \

@@ -45,17 +45,23 @@
     </dict>
     <key>NSSupportsLiveActivities</key>
     <true/>
-    
-    <!-- LOCATION BACKGROUND MODE -->
+    <key>NSSupportsLiveActivitiesFrequentUpdates</key>
+    <true/>
+
+    <!-- Background execution modes used by BackgroundKeeper -->
     <key>UIBackgroundModes</key>
     <array>
+        <string>audio</string>
         <string>location</string>
+        <string>processing</string>
     </array>
-    
-    <!-- LOCATION PERMISSIONS -->
+
+    <!-- Location permissions (secondary keep-alive) -->
     <key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
-    <string>Приложение использует геопозицию для поддержания работы прокси в фоновом режиме</string>
+    <string>Геолокация используется только как резервный механизм, чтобы локальный прокси не выгружался iOS, пока он активен.</string>
     <key>NSLocationWhenInUseUsageDescription</key>
-    <string>Приложение использует геопозицию для поддержания работы прокси в фоновом режиме</string>
+    <string>Геолокация используется только как резервный механизм, чтобы локальный прокси не выгружался iOS, пока он активен.</string>
+    <key>NSLocationAlwaysUsageDescription</key>
+    <string>Геолокация используется только как резервный механизм, чтобы локальный прокси не выгружался iOS, пока он активен.</string>
 </dict>
 </plist>

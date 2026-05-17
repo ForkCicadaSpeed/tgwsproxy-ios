@@ -378,9 +378,12 @@ final class MTProtoProxyServer {
                 } else if let data, !data.isEmpty {
                     cont.resume(returning: data)
                 } else if isComplete {
+                    // Peer closed the connection — return empty Data so the
+                    // caller can break out of its read loop cleanly.
                     cont.resume(returning: Data())
                 } else {
-                    cont.resume(throwing: RawWebSocket.ConnectionError.closed)
+                    // No data, no error, not complete: treat as transient EOF.
+                    cont.resume(returning: Data())
                 }
             }
         }

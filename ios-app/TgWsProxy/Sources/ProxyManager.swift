@@ -1,42 +1,8 @@
 import Foundation
 import Combine
 import os.log
-import CoreLocation
 
 private let logger = Logger(subsystem: "com.tgwsproxy.app", category: "ProxyManager")
-
-// MARK: - Location Manager (встроенный)
-@available(iOS 17.0, *)
-@MainActor
-final class LocationManager: NSObject, CLLocationManagerDelegate {
-    static let shared = LocationManager()
-    private let manager = CLLocationManager()
-    
-    override init() {
-        super.init()
-        manager.delegate = self
-        manager.allowsBackgroundLocationUpdates = true
-        manager.pausesLocationUpdatesAutomatically = false
-        manager.desiredAccuracy = kCLLocationAccuracyThreeKilometers
-    }
-    
-    func start() {
-        manager.requestAlwaysAuthorization()
-        manager.startUpdatingLocation()
-    }
-    
-    func stop() {
-        manager.stopUpdatingLocation()
-    }
-    
-    nonisolated func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
-        // Ничего не делаем — просто держим приложение в фоне
-    }
-    
-    nonisolated func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
-        print("Location error: \(error)")
-    }
-}
 
 // MARK: - Proxy Stats
 struct ProxyStats {
@@ -53,7 +19,7 @@ struct ProxyStats {
 // MARK: - Proxy Manager
 @MainActor
 @available(iOS 17.0, *)
-class ProxyManager: ObservableObject {
+final class ProxyManager: ObservableObject {
     static let shared = ProxyManager()
 
     @Published var isRunning = false
@@ -71,17 +37,24 @@ class ProxyManager: ObservableObject {
 
         logger.info("Starting proxy on \(self.config.host):\(self.config.port)")
 
-        // ЗАПУСК ГЕОЛОКАЦИИ!
-        LocationManager.shared.start()
-        
-        // Live Activity
-        LiveActivityManager.shared.startActivity(host: config.host, port: config.port)
+        // Background keep-alive (silent audio + location + UIBackgroundTask).
+        BackgroundKeeper.shared.start()
 
-        server = MTProtoProxyServer(config: config, statsCallback: { [weak self] newStats in
+        // Live Activity on Dynamic Island / Lock Screen.
+        LiveActivityManager.shared.startActivity(
+            host: config.host,
+            port: config.port,
+            secret: config.secret
+        )
+
+        let configSnapshot = config
+        server = MTProtoProxyServer(config: configSnapshot, statsCallback: { [weak self] newStats in
             Task { @MainActor in
-                self?.stats = newStats
+                guard let self else { return }
+                self.stats = newStats
                 LiveActivityManager.shared.updateActivity(
                     connections: newStats.connectionsActive,
+                    totalConnections: newStats.connectionsTotal,
                     bytesUp: newStats.bytesUp,
                     bytesDown: newStats.bytesDown
                 )
@@ -94,10 +67,11 @@ class ProxyManager: ObservableObject {
                 isRunning = true
                 logger.info("Proxy started successfully")
             } catch {
-                logger.error("Failed to start proxy: \(error)")
+                logger.error("Failed to start proxy: \(error.localizedDescription)")
                 isRunning = false
-                LocationManager.shared.stop()
+                BackgroundKeeper.shared.stop()
                 LiveActivityManager.shared.stopActivity()
+                server = nil
             }
         }
     }
@@ -105,10 +79,10 @@ class ProxyManager: ObservableObject {
     func stopProxy() {
         guard isRunning else { return }
         logger.info("Stopping proxy")
-        
-        LocationManager.shared.stop()
+
+        BackgroundKeeper.shared.stop()
         LiveActivityManager.shared.stopActivity()
-        
+
         server?.stop()
         server = nil
         isRunning = false

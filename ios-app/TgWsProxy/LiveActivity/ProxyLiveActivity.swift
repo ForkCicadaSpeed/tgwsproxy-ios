@@ -4,103 +4,128 @@ import ActivityKit
 
 // MARK: - Live Activity Widget for Dynamic Island
 
-@available(iOS 16.1, *)
+@available(iOS 17.0, *)
 struct ProxyLiveActivity: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: ProxyActivityAttributes.self) { context in
-            // Lock Screen banner
+            // Lock Screen / banner presentation
             lockScreenView(context: context)
+                .activityBackgroundTint(Color.black.opacity(0.85))
+                .activitySystemActionForegroundColor(.white)
         } dynamicIsland: { context in
             DynamicIsland {
-                // Expanded view
                 DynamicIslandExpandedRegion(.leading) {
-                    Label("TG Proxy", systemImage: "antenna.radiowaves.left.and.right")
-                        .font(.caption2)
-                        .foregroundStyle(.cyan)
-                }
-                DynamicIslandExpandedRegion(.trailing) {
-                    Text(context.state.isRunning ? "Active" : "Stopped")
-                        .font(.caption2)
-                        .foregroundStyle(context.state.isRunning ? .green : .red)
-                }
-                DynamicIslandExpandedRegion(.bottom) {
-                    HStack(spacing: 16) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Connections")
-                                .font(.system(size: 10))
+                    HStack(spacing: 6) {
+                        Image(systemName: "antenna.radiowaves.left.and.right")
+                            .foregroundStyle(.cyan)
+                        VStack(alignment: .leading, spacing: 0) {
+                            Text("TG Proxy")
+                                .font(.caption.bold())
+                            Text("\(context.attributes.host):\(context.attributes.port)")
+                                .font(.system(size: 10, design: .monospaced))
                                 .foregroundStyle(.secondary)
-                            Text("\(context.state.connectionsActive)")
-                                .font(.system(.body, design: .monospaced).bold())
-                        }
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("↑ Upload")
-                                .font(.system(size: 10))
-                                .foregroundStyle(.secondary)
-                            Text(formatBytes(context.state.bytesUp))
-                                .font(.system(.caption, design: .monospaced))
-                        }
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("↓ Download")
-                                .font(.system(size: 10))
-                                .foregroundStyle(.secondary)
-                            Text(formatBytes(context.state.bytesDown))
-                                .font(.system(.caption, design: .monospaced))
                         }
                     }
-                    .padding(.top, 4)
+                }
+                DynamicIslandExpandedRegion(.trailing) {
+                    VStack(alignment: .trailing, spacing: 0) {
+                        Text(context.state.isRunning ? "ACTIVE" : "OFF")
+                            .font(.caption2.bold())
+                            .foregroundStyle(context.state.isRunning ? .green : .red)
+                        if context.state.isRunning {
+                            Text(timerInterval: context.state.startedAt...Date.distantFuture,
+                                 countsDown: false)
+                                .font(.system(size: 10, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                                .multilineTextAlignment(.trailing)
+                                .frame(maxWidth: 60)
+                        }
+                    }
+                }
+                DynamicIslandExpandedRegion(.bottom) {
+                    HStack(spacing: 14) {
+                        statBlock(title: "Conn", value: "\(context.state.connectionsActive)")
+                        statBlock(title: "Total", value: "\(context.state.connectionsTotal)")
+                        statBlock(title: "↑", value: formatBytes(context.state.bytesUp))
+                        statBlock(title: "↓", value: formatBytes(context.state.bytesDown))
+                    }
+                    .padding(.top, 2)
                 }
             } compactLeading: {
                 Image(systemName: "antenna.radiowaves.left.and.right")
-                    .foregroundStyle(.cyan)
-                    .font(.caption2)
+                    .foregroundStyle(context.state.isRunning ? .cyan : .gray)
             } compactTrailing: {
                 Text("\(context.state.connectionsActive)")
-                    .font(.system(.caption, design: .monospaced))
-                    .foregroundStyle(.green)
+                    .font(.system(.caption, design: .monospaced).bold())
+                    .foregroundStyle(context.state.isRunning ? .green : .gray)
+                    .monospacedDigit()
             } minimal: {
                 Image(systemName: "antenna.radiowaves.left.and.right")
-                    .foregroundStyle(.cyan)
-                    .font(.caption2)
+                    .foregroundStyle(context.state.isRunning ? .cyan : .gray)
             }
+            .keylineTint(.cyan)
         }
     }
 
     private func lockScreenView(context: ActivityViewContext<ProxyActivityAttributes>) -> some View {
-        HStack {
-            Image(systemName: "antenna.radiowaves.left.and.right")
-                .font(.title2)
-                .foregroundStyle(.cyan)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text("TG WS Proxy")
-                    .font(.headline)
-                Text("\(context.attributes.host):\(context.attributes.port)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .monospaced()
+        VStack(spacing: 6) {
+            HStack {
+                Image(systemName: "antenna.radiowaves.left.and.right")
+                    .font(.title3)
+                    .foregroundStyle(.cyan)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("TG WS Proxy")
+                        .font(.headline)
+                        .foregroundStyle(.white)
+                    Text("\(context.attributes.host):\(context.attributes.port) · dd…\(context.attributes.secretSuffix)")
+                        .font(.system(.caption2, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.7))
+                }
+                Spacer()
+                VStack(alignment: .trailing, spacing: 1) {
+                    Text(context.state.isRunning ? "ACTIVE" : "OFF")
+                        .font(.caption.bold())
+                        .foregroundStyle(context.state.isRunning ? .green : .red)
+                    if context.state.isRunning {
+                        Text(timerInterval: context.state.startedAt...Date.distantFuture,
+                             countsDown: false)
+                            .font(.system(.caption2, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.7))
+                            .multilineTextAlignment(.trailing)
+                            .frame(maxWidth: 70)
+                    }
+                }
             }
-
-            Spacer()
-
-            VStack(alignment: .trailing, spacing: 2) {
-                Text(context.state.isRunning ? "●" : "○")
-                    .foregroundStyle(context.state.isRunning ? .green : .red)
-                Text("\(context.state.connectionsActive) conn")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+            HStack(spacing: 12) {
+                statBlock(title: "Conn", value: "\(context.state.connectionsActive)")
+                statBlock(title: "Total", value: "\(context.state.connectionsTotal)")
+                statBlock(title: "↑", value: formatBytes(context.state.bytesUp))
+                statBlock(title: "↓", value: formatBytes(context.state.bytesDown))
             }
         }
-        .padding()
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+    }
+
+    private func statBlock(title: String, value: String) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(title)
+                .font(.system(size: 9))
+                .foregroundStyle(.secondary)
+            Text(value)
+                .font(.system(.caption, design: .monospaced).bold())
+                .foregroundStyle(.white)
+        }
     }
 
     private func formatBytes(_ bytes: UInt64) -> String {
-        let units = ["B", "KB", "MB", "GB"]
+        let units = ["B", "K", "M", "G"]
         var value = Double(bytes)
         for unit in units {
-            if value < 1024 { return String(format: "%.1f%@", value, unit) }
+            if value < 1024 { return String(format: "%.0f%@", value, unit) }
             value /= 1024
         }
-        return String(format: "%.1fTB", value)
+        return String(format: "%.0fT", value)
     }
 }
 
@@ -109,8 +134,6 @@ struct ProxyLiveActivity: Widget {
 @main
 struct ProxyWidgetBundle: WidgetBundle {
     var body: some Widget {
-        if #available(iOS 16.1, *) {
-            ProxyLiveActivity()
-        }
+        ProxyLiveActivity()
     }
 }

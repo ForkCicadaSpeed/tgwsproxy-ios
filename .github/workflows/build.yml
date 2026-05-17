@@ -350,10 +350,11 @@ jobs:
             TgWsProxy/Sources/MTProtoHandshake.swift
             TgWsProxy/Sources/MTProtoProxyServer.swift
             TgWsProxy/Sources/LiveActivityManager.swift
+            TgWsProxy/Sources/BackgroundKeeper.swift
           )
 
           swiftc \
-            -target arm64-apple-ios16.1 \
+            -target arm64-apple-ios17.0 \
             -sdk "$SDK" \
             -O \
             -whole-module-optimization \
@@ -366,6 +367,8 @@ jobs:
             -framework Network \
             -framework ActivityKit \
             -framework WidgetKit \
+            -framework CoreLocation \
+            -framework AVFoundation \
             "${SOURCES[@]}"
 
           strip -x build/Payload/TgWsProxy.app/TgWsProxy
@@ -378,7 +381,7 @@ jobs:
           mkdir -p "$EXTENSION_DIR"
 
           swiftc \
-            -target arm64-apple-ios16.1 \
+            -target arm64-apple-ios17.0 \
             -sdk "$SDK" \
             -O \
             -whole-module-optimization \

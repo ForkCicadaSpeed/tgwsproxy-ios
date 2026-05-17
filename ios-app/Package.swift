@@ -1,4 +1,9 @@
 // swift-tools-version:5.9
+//
+// NOTE: This Package.swift exists only to give IDEs a coarse view of the
+// project. Actual iOS builds happen with `swiftc` directly via
+// `ios-app/build.sh` or the GitHub Actions workflows; SwiftPM cannot build
+// iOS executables / app bundles on its own.
 import PackageDescription
 
 let package = Package(
@@ -19,7 +24,8 @@ let package = Package(
                 .linkedFramework("Network"),
                 .linkedFramework("ActivityKit"),
                 .linkedFramework("WidgetKit"),
-                .linkedFramework("CoreLocation"),  // <-- ДОБАВИТЬ
+                .linkedFramework("CoreLocation"),
+                .linkedFramework("AVFoundation"),
             ]
         ),
     ]
