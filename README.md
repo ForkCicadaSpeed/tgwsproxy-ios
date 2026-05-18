@@ -26,6 +26,7 @@ Sources/
 ├── SettingsView.swift         — настройки (порт, secret, DC)
 ├── ProxyConfig.swift          — конфигурация (UserDefaults)
 ├── ProxyManager.swift         — управление прокси-сервером
+├── BackgroundKeeper.swift     — keep-alive: silent audio + location + bg task
 ├── Crypto.swift               — AES-256-CTR, SHA-256 (CommonCrypto)
 ├── RawWebSocket.swift         — WebSocket клиент (NWConnection + TLS)
 ├── MTProtoHandshake.swift     — MTProto handshake, relay init, splitter
@@ -36,6 +37,24 @@ LiveActivity/
 ├── ProxyLiveActivity.swift    — виджет Dynamic Island
 └── Info.plist                 — конфигурация расширения
 ```
+
+## Фоновая работа
+
+Чтобы локальный MTProto-прокси не выгружался iOS, пока пользователь
+переключился на Telegram, используется несколько механизмов одновременно
+(`BackgroundKeeper`):
+
+1. **Silent audio** (`UIBackgroundModes = audio`) — основной механизм.
+   `AVAudioEngine` проигрывает почти-беззвучный буфер, что удерживает
+   процесс в активном состоянии.
+2. **Background location** (`UIBackgroundModes = location`) — резерв.
+   Активируется, если пользователь предоставил разрешение «Always».
+3. **UIBackgroundTask** — короткий запрос дополнительного времени у
+   системы поверх п.1–2.
+4. **Live Activity / Dynamic Island** — показывает состояние, активные
+   подключения, трафик и время работы прямо в Dynamic Island и на
+   экране блокировки. Сам по себе **не** удерживает процесс, но
+   синхронизируется со статусом прокси.
 
 ## Сборка IPA
 

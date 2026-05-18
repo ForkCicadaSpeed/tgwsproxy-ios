@@ -7,28 +7,48 @@ struct ProxyActivityAttributes: ActivityAttributes {
     public struct ContentState: Codable, Hashable {
         var isRunning: Bool
         var connectionsActive: Int
+        var connectionsTotal: Int
         var bytesUp: UInt64
         var bytesDown: UInt64
+        var startedAt: Date
     }
 
     var host: String
     var port: Int
+    var secretSuffix: String   // last 4 hex chars of secret for quick visual ID
 }
 
 // MARK: - Live Activity Manager
 
 @MainActor
-class LiveActivityManager: ObservableObject {
+@available(iOS 17.0, *)
+final class LiveActivityManager: ObservableObject {
     static let shared = LiveActivityManager()
 
     private var activity: Activity<ProxyActivityAttributes>?
+    private var startedAt: Date = .distantPast
 
-    func startActivity(host: String, port: Int) {
-        guard ActivityAuthorizationInfo().areActivitiesEnabled else { return }
+    func startActivity(host: String, port: Int, secret: String) {
+        // If an activity is already live, just refresh it instead of spawning a duplicate.
+        if activity != nil {
+            updateActivity(connections: 0, totalConnections: 0, bytesUp: 0, bytesDown: 0)
+            return
+        }
+        guard ActivityAuthorizationInfo().areActivitiesEnabled else {
+            print("Live Activities are disabled in iOS settings")
+            return
+        }
 
-        let attributes = ProxyActivityAttributes(host: host, port: port)
+        startedAt = Date()
+        let suffix = secret.count >= 4 ? String(secret.suffix(4)) : secret
+        let attributes = ProxyActivityAttributes(host: host, port: port, secretSuffix: suffix)
         let state = ProxyActivityAttributes.ContentState(
-            isRunning: true, connectionsActive: 0, bytesUp: 0, bytesDown: 0
+            isRunning: true,
+            connectionsActive: 0,
+            connectionsTotal: 0,
+            bytesUp: 0,
+            bytesDown: 0,
+            startedAt: startedAt
         )
 
         do {
@@ -43,25 +63,36 @@ class LiveActivityManager: ObservableObject {
         }
     }
 
-    func updateActivity(connections: Int, bytesUp: UInt64, bytesDown: UInt64) {
+    func updateActivity(connections: Int, totalConnections: Int, bytesUp: UInt64, bytesDown: UInt64) {
+        guard let activity else { return }
         let state = ProxyActivityAttributes.ContentState(
-            isRunning: true, connectionsActive: connections,
-            bytesUp: bytesUp, bytesDown: bytesDown
+            isRunning: true,
+            connectionsActive: connections,
+            connectionsTotal: totalConnections,
+            bytesUp: bytesUp,
+            bytesDown: bytesDown,
+            startedAt: startedAt
         )
         Task {
             let content = ActivityContent(state: state, staleDate: nil)
-            await activity?.update(content)
+            await activity.update(content)
         }
     }
 
     func stopActivity() {
+        guard let activity else { return }
         let state = ProxyActivityAttributes.ContentState(
-            isRunning: false, connectionsActive: 0, bytesUp: 0, bytesDown: 0
+            isRunning: false,
+            connectionsActive: 0,
+            connectionsTotal: 0,
+            bytesUp: 0,
+            bytesDown: 0,
+            startedAt: startedAt
         )
         Task {
             let content = ActivityContent(state: state, staleDate: nil)
-            await activity?.end(content, dismissalPolicy: .immediate)
-            activity = nil
+            await activity.end(content, dismissalPolicy: .immediate)
         }
+        self.activity = nil
     }
 }

@@ -52,6 +52,7 @@ SWIFT_FILES=(
     "$SOURCES_DIR/MTProtoHandshake.swift"
     "$SOURCES_DIR/MTProtoProxyServer.swift"
     "$SOURCES_DIR/LiveActivityManager.swift"
+    "$SOURCES_DIR/BackgroundKeeper.swift"
 )
 
 echo "Compiling ${#SWIFT_FILES[@]} Swift files..."
@@ -70,7 +71,8 @@ swiftc \
     -framework Network \
     -framework ActivityKit \
     -framework WidgetKit \
-    -import-objc-header /dev/null \
+    -framework CoreLocation \
+    -framework AVFoundation \
     "${SWIFT_FILES[@]}"
 
 echo "Compilation successful."

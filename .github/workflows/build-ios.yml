@@ -5,6 +5,10 @@ on:
   push:
     paths:
       - 'ios-app/**'
+      - '.github/workflows/build-ios.yml'
+
+permissions:
+  contents: write
 
 jobs:
   build-ios:
@@ -36,6 +40,7 @@ jobs:
             TgWsProxy/Sources/ContentView.swift
             TgWsProxy/Sources/SettingsView.swift
             TgWsProxy/Sources/ProxyConfig.swift
+            TgWsProxy/Sources/ProxyStats.swift
             TgWsProxy/Sources/ProxyManager.swift
             TgWsProxy/Sources/Crypto.swift
             TgWsProxy/Sources/RawWebSocket.swift
@@ -47,7 +52,7 @@ jobs:
           echo "Compiling ${#SOURCES[@]} Swift files..."
 
           swiftc \
-            -target arm64-apple-ios16.1 \
+            -target arm64-apple-ios17.0 \
             -sdk "$SDK" \
             -O \
             -whole-module-optimization \
@@ -58,6 +63,7 @@ jobs:
             -framework SwiftUI \
             -framework UIKit \
             -framework Network \
+            -framework NetworkExtension \
             -framework ActivityKit \
             -framework WidgetKit \
             "${SOURCES[@]}"
@@ -72,9 +78,8 @@ jobs:
           EXTENSION_DIR="build/Payload/TgWsProxy.app/PlugIns/TgWsProxyLiveActivity.appex"
           mkdir -p "$EXTENSION_DIR"
 
-          # LiveActivity extension needs the shared attributes type from the main app
           swiftc \
-            -target arm64-apple-ios16.1 \
+            -target arm64-apple-ios17.0 \
             -sdk "$SDK" \
             -O \
             -whole-module-optimization \
@@ -89,10 +94,46 @@ jobs:
             TgWsProxy/LiveActivity/ProxyLiveActivity.swift
 
           strip -x "$EXTENSION_DIR/TgWsProxyLiveActivity" 2>/dev/null || true
-
-          # Copy extension Info.plist
           cp TgWsProxy/LiveActivity/Info.plist "$EXTENSION_DIR/Info.plist"
           echo "LiveActivity extension compiled successfully."
+
+      - name: Compile PacketTunnel extension
+        working-directory: ios-app
+        run: |
+          set -euo pipefail
+          TUNNEL_DIR="build/Payload/TgWsProxy.app/PlugIns/TgWsProxyTunnel.appex"
+          mkdir -p "$TUNNEL_DIR"
+
+          # Shared sources needed by the tunnel extension
+          SHARED=(
+            TgWsProxy/Sources/ProxyConfig.swift
+            TgWsProxy/Sources/ProxyStats.swift
+            TgWsProxy/Sources/Crypto.swift
+            TgWsProxy/Sources/RawWebSocket.swift
+            TgWsProxy/Sources/MTProtoHandshake.swift
+            TgWsProxy/Sources/MTProtoProxyServer.swift
+          )
+
+          swiftc \
+            -target arm64-apple-ios17.0 \
+            -sdk "$SDK" \
+            -O \
+            -whole-module-optimization \
+            -module-name TgWsProxyTunnel \
+            -emit-executable \
+            -o "$TUNNEL_DIR/TgWsProxyTunnel" \
+            -framework Foundation \
+            -framework NetworkExtension \
+            -framework Network \
+            -framework Security \
+            TgWsProxy/Tunnel/PacketTunnelProvider.swift \
+            TgWsProxy/Tunnel/TunnelMain.swift \
+            "${SHARED[@]}"
+
+          strip -x "$TUNNEL_DIR/TgWsProxyTunnel" 2>/dev/null || true
+          cp TgWsProxy/Tunnel/Info.plist "$TUNNEL_DIR/Info.plist"
+          cp TgWsProxy/Tunnel/TgWsProxyTunnel.entitlements "$TUNNEL_DIR/TgWsProxyTunnel.entitlements"
+          echo "PacketTunnel extension compiled successfully."
 
       - name: Assemble app bundle
         working-directory: ios-app
@@ -100,10 +141,18 @@ jobs:
           set -euo pipefail
           APP_DIR="build/Payload/TgWsProxy.app"
 
-          # Copy main app Info.plist & entitlements
           cp TgWsProxy/Resources/Info.plist "$APP_DIR/Info.plist"
           cp TgWsProxy/Resources/TgWsProxy.entitlements "$APP_DIR/TgWsProxy.entitlements"
           echo -n "APPL????" > "$APP_DIR/PkgInfo"
+          cp TgWsProxy/Resources/AppIcon/*.png "$APP_DIR/"
+
+          # Ad-hoc sign main app and extensions with entitlements
+          codesign --force --sign - \
+            --entitlements TgWsProxy/Resources/TgWsProxy.entitlements \
+            "$APP_DIR/TgWsProxy"
+          codesign --force --sign - \
+            --entitlements TgWsProxy/Tunnel/TgWsProxyTunnel.entitlements \
+            "$APP_DIR/PlugIns/TgWsProxyTunnel.appex/TgWsProxyTunnel"
 
           echo "App bundle structure:"
           find "$APP_DIR" -type f | sort
@@ -121,3 +170,25 @@ jobs:
         with:
           name: TgWsProxy-unsigned-ipa
           path: ios-app/TgWsProxy-unsigned.ipa
+
+      - name: Publish IPA as rolling pre-release
+        if: github.ref != 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          TAG="ci-$(echo "$BRANCH" | tr '/' '-' | tr -cd 'A-Za-z0-9._-')"
+          IPA="ios-app/TgWsProxy-unsigned.ipa"
+
+          # Delete previous release for this branch tag (if any), so the
+          # download URL stays stable and small.
+          gh release delete "$TAG" --yes --cleanup-tag --repo "$GITHUB_REPOSITORY" 2>/dev/null || true
+
+          gh release create "$TAG" \
+            "$IPA" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "CI build for $BRANCH" \
+            --notes "Unsigned IPA built by CI from $GITHUB_SHA on branch \`$BRANCH\`. Sign with your own provisioning profile or Sideloadly / AltStore." \
+            --prerelease

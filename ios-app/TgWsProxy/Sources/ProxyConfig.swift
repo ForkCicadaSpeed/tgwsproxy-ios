@@ -2,6 +2,8 @@ import Foundation
 import Security
 
 struct ProxyConfig: Codable {
+    static let appGroupID = "group.com.tgwsproxy.app"
+
     var host: String = "127.0.0.1"
     var port: Int = 1443
     var secret: String = ProxyConfig.generateSecret()
@@ -11,7 +13,36 @@ struct ProxyConfig: Codable {
     var poolSize: Int = 4
     var verbose: Bool = false
 
+    // Cloudflare Worker fronting domain, e.g. "random-name.username.workers.dev".
+    // When set, the proxy routes WSS via this domain instead of Telegram's
+    // direct `kwsN.web.telegram.org` endpoints. This is what makes the
+    // Python reference proxy actually work inside restricted regions
+    // (Russia / DPI / RST injection) — the direct Telegram WS IPs are
+    // RST-injected, Cloudflare Workers are not.
+    var cfWorkerDomain: String = ""
+
     var bufferSize: Int { bufferSizeKB * 1024 }
+
+    private enum CodingKeys: String, CodingKey {
+        case host, port, secret, dcRedirects, dcOverrides
+        case bufferSizeKB, poolSize, verbose, cfWorkerDomain
+    }
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        host = try c.decodeIfPresent(String.self, forKey: .host) ?? "127.0.0.1"
+        port = try c.decodeIfPresent(Int.self, forKey: .port) ?? 1443
+        secret = try c.decodeIfPresent(String.self, forKey: .secret) ?? ProxyConfig.generateSecret()
+        dcRedirects = try c.decodeIfPresent([Int: String].self, forKey: .dcRedirects)
+            ?? [2: "149.154.167.220", 4: "149.154.167.220"]
+        dcOverrides = try c.decodeIfPresent([Int: Int].self, forKey: .dcOverrides) ?? [203: 2]
+        bufferSizeKB = try c.decodeIfPresent(Int.self, forKey: .bufferSizeKB) ?? 256
+        poolSize = try c.decodeIfPresent(Int.self, forKey: .poolSize) ?? 4
+        verbose = try c.decodeIfPresent(Bool.self, forKey: .verbose) ?? false
+        cfWorkerDomain = try c.decodeIfPresent(String.self, forKey: .cfWorkerDomain) ?? ""
+    }
 
     static func generateSecret() -> String {
         var bytes = [UInt8](repeating: 0, count: 16)
@@ -28,16 +59,30 @@ struct ProxyConfig: Codable {
         203: "91.105.192.100"
     ]
 
+    private static var groupDefaults: UserDefaults {
+        UserDefaults(suiteName: appGroupID) ?? UserDefaults.standard
+    }
+
     static func load() -> ProxyConfig {
-        guard let data = UserDefaults.standard.data(forKey: "proxyConfig"),
-              let config = try? JSONDecoder().decode(ProxyConfig.self, from: data) else {
-            return ProxyConfig()
+        // Try app group first (shared with tunnel extension)
+        if let data = groupDefaults.data(forKey: "proxyConfig"),
+           let config = try? JSONDecoder().decode(ProxyConfig.self, from: data) {
+            return config
         }
-        return config
+        // Migrate from standard UserDefaults (pre-VPN builds)
+        if let data = UserDefaults.standard.data(forKey: "proxyConfig"),
+           let config = try? JSONDecoder().decode(ProxyConfig.self, from: data) {
+            config.save()
+            return config
+        }
+        let fresh = ProxyConfig()
+        fresh.save()
+        return fresh
     }
 
     func save() {
         if let data = try? JSONEncoder().encode(self) {
+            ProxyConfig.groupDefaults.set(data, forKey: "proxyConfig")
             UserDefaults.standard.set(data, forKey: "proxyConfig")
         }
     }

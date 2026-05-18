@@ -1,5 +1,7 @@
 import SwiftUI
+import NetworkExtension
 
+@available(iOS 17.0, *)
 struct ContentView: View {
     @EnvironmentObject var proxy: ProxyManager
     @State private var showSettings = false
@@ -59,7 +61,7 @@ struct ContentView: View {
                 .foregroundStyle(proxy.isRunning ? .green : .secondary)
                 .symbolEffect(.pulse, isActive: proxy.isRunning)
 
-            Text(proxy.isRunning ? "Прокси активен" : "Прокси остановлен")
+            Text(vpnStatusText)
                 .font(.headline)
                 .foregroundStyle(proxy.isRunning ? .primary : .secondary)
 
@@ -81,11 +83,30 @@ struct ContentView: View {
                 Spacer()
             }
             HStack(spacing: 16) {
-                statItem("Подключений", value: "\(proxy.stats.connectionsActive)")
+                statItem(
+                    "Подключений",
+                    value: "\(proxy.stats.connectionsActive)/\(proxy.stats.connectionsTotal)"
+                )
                 statItem("WS", value: "\(proxy.stats.connectionsWS)")
                 statItem("↑", value: formatBytes(proxy.stats.bytesUp))
                 statItem("↓", value: formatBytes(proxy.stats.bytesDown))
             }
+            // Diagnostic row — exposes why a session might not flow.
+            // If connectionsTotal > 0 but WS == 0 and wsErrors > 0, the
+            // upstream WS handshake is failing (RF blocks direct Telegram
+            // WS edges; configure a Cloudflare Worker in settings).
+            // bad = client handshake failed (wrong secret / not MTProto).
+            // tcpFB = WS failed but a direct-TCP fallback path took over.
+            HStack(spacing: 16) {
+                statItem("WS err", value: "\(proxy.stats.wsErrors)")
+                statItem("Bad", value: "\(proxy.stats.connectionsBad)")
+                statItem("TCP FB", value: "\(proxy.stats.connectionsTCPFallback)")
+                statItem(
+                    "CF",
+                    value: proxy.config.cfWorkerDomain.isEmpty ? "off" : "on"
+                )
+            }
+            .opacity(0.85)
         }
         .padding()
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
@@ -151,21 +172,35 @@ struct ContentView: View {
         }
     }
 
+    private var vpnStatusText: String {
+        switch proxy.vpnStatus {
+        case .connected: return "Прокси активен (VPN)"
+        case .connecting: return "Подключение..."
+        case .disconnecting: return "Отключение..."
+        case .reasserting: return "Переподключение..."
+        case .invalid: return "VPN не настроен"
+        default: return "Прокси остановлен"
+        }
+    }
+
+    private var isTransitioning: Bool {
+        proxy.vpnStatus == .connecting || proxy.vpnStatus == .disconnecting || proxy.vpnStatus == .reasserting
+    }
+
     private var startStopButton: some View {
         Button {
             if proxy.isRunning {
                 proxy.stopProxy()
-                LiveActivityManager.shared.stopActivity()
             } else {
                 proxy.startProxy()
-                LiveActivityManager.shared.startActivity(
-                    host: proxy.config.host,
-                    port: proxy.config.port
-                )
             }
         } label: {
             HStack {
-                Image(systemName: proxy.isRunning ? "stop.fill" : "play.fill")
+                if isTransitioning {
+                    ProgressView().tint(.white)
+                } else {
+                    Image(systemName: proxy.isRunning ? "stop.fill" : "play.fill")
+                }
                 Text(proxy.isRunning ? "Остановить" : "Запустить")
                     .fontWeight(.semibold)
             }
@@ -175,6 +210,7 @@ struct ContentView: View {
         .buttonStyle(.borderedProminent)
         .tint(proxy.isRunning ? .red : .green)
         .controlSize(.large)
+        .disabled(isTransitioning)
     }
 
     private func formatBytes(_ bytes: UInt64) -> String {

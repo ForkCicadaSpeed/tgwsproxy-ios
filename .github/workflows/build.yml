@@ -344,6 +344,7 @@ jobs:
             TgWsProxy/Sources/ContentView.swift
             TgWsProxy/Sources/SettingsView.swift
             TgWsProxy/Sources/ProxyConfig.swift
+            TgWsProxy/Sources/ProxyStats.swift
             TgWsProxy/Sources/ProxyManager.swift
             TgWsProxy/Sources/Crypto.swift
             TgWsProxy/Sources/RawWebSocket.swift
@@ -353,7 +354,7 @@ jobs:
           )
 
           swiftc \
-            -target arm64-apple-ios16.1 \
+            -target arm64-apple-ios17.0 \
             -sdk "$SDK" \
             -O \
             -whole-module-optimization \
@@ -364,6 +365,7 @@ jobs:
             -framework SwiftUI \
             -framework UIKit \
             -framework Network \
+            -framework NetworkExtension \
             -framework ActivityKit \
             -framework WidgetKit \
             "${SOURCES[@]}"
@@ -378,7 +380,7 @@ jobs:
           mkdir -p "$EXTENSION_DIR"
 
           swiftc \
-            -target arm64-apple-ios16.1 \
+            -target arm64-apple-ios17.0 \
             -sdk "$SDK" \
             -O \
             -whole-module-optimization \
@@ -395,6 +397,42 @@ jobs:
           strip -x "$EXTENSION_DIR/TgWsProxyLiveActivity" 2>/dev/null || true
           cp TgWsProxy/LiveActivity/Info.plist "$EXTENSION_DIR/Info.plist"
 
+      - name: Compile PacketTunnel extension
+        working-directory: ios-app
+        run: |
+          set -euo pipefail
+          TUNNEL_DIR="build/Payload/TgWsProxy.app/PlugIns/TgWsProxyTunnel.appex"
+          mkdir -p "$TUNNEL_DIR"
+
+          SHARED=(
+            TgWsProxy/Sources/ProxyConfig.swift
+            TgWsProxy/Sources/ProxyStats.swift
+            TgWsProxy/Sources/Crypto.swift
+            TgWsProxy/Sources/RawWebSocket.swift
+            TgWsProxy/Sources/MTProtoHandshake.swift
+            TgWsProxy/Sources/MTProtoProxyServer.swift
+          )
+
+          swiftc \
+            -target arm64-apple-ios17.0 \
+            -sdk "$SDK" \
+            -O \
+            -whole-module-optimization \
+            -module-name TgWsProxyTunnel \
+            -emit-executable \
+            -o "$TUNNEL_DIR/TgWsProxyTunnel" \
+            -framework Foundation \
+            -framework NetworkExtension \
+            -framework Network \
+            -framework Security \
+            TgWsProxy/Tunnel/PacketTunnelProvider.swift \
+            TgWsProxy/Tunnel/TunnelMain.swift \
+            "${SHARED[@]}"
+
+          strip -x "$TUNNEL_DIR/TgWsProxyTunnel" 2>/dev/null || true
+          cp TgWsProxy/Tunnel/Info.plist "$TUNNEL_DIR/Info.plist"
+          cp TgWsProxy/Tunnel/TgWsProxyTunnel.entitlements "$TUNNEL_DIR/TgWsProxyTunnel.entitlements"
+
       - name: Assemble app bundle & create IPA
         working-directory: ios-app
         run: |
@@ -403,6 +441,15 @@ jobs:
           cp TgWsProxy/Resources/Info.plist "$APP_DIR/Info.plist"
           cp TgWsProxy/Resources/TgWsProxy.entitlements "$APP_DIR/TgWsProxy.entitlements"
           echo -n "APPL????" > "$APP_DIR/PkgInfo"
+          cp TgWsProxy/Resources/AppIcon/*.png "$APP_DIR/"
+
+          codesign --force --sign - \
+            --entitlements TgWsProxy/Resources/TgWsProxy.entitlements \
+            "$APP_DIR/TgWsProxy"
+          codesign --force --sign - \
+            --entitlements TgWsProxy/Tunnel/TgWsProxyTunnel.entitlements \
+            "$APP_DIR/PlugIns/TgWsProxyTunnel.appex/TgWsProxyTunnel"
+
           cd build
           zip -r -q ../TgWsProxy_ios_unsigned.ipa Payload/
 

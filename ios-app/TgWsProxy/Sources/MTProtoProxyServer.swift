@@ -6,16 +6,25 @@ private let logger = Logger(subsystem: "com.tgwsproxy.app", category: "ProxyServ
 
 // MARK: - MTProto Proxy Server
 
-final class MTProtoProxyServer: @unchecked Sendable {
+@available(iOS 17.0, *)
+final class MTProtoProxyServer {
     private let config: ProxyConfig
     private var listener: NWListener?
     private var statsCallback: ((ProxyStats) -> Void)?
-    private var stats = ProxyStats()
-    private let statsLock = NSLock()
+    private var onListenerFailed: (() -> Void)?
+    private let statsActor = StatsActor()
+    private(set) var isListenerReady = false
 
-    init(config: ProxyConfig, statsCallback: ((ProxyStats) -> Void)? = nil) {
+    init(config: ProxyConfig, statsCallback: ((ProxyStats) -> Void)? = nil,
+         onListenerFailed: (() -> Void)? = nil) {
         self.config = config
         self.statsCallback = statsCallback
+        self.onListenerFailed = onListenerFailed
+    }
+
+    deinit {
+        listener?.cancel()
+        listener = nil
     }
 
     func start() async throws {
@@ -23,30 +32,47 @@ final class MTProtoProxyServer: @unchecked Sendable {
         tcpOptions.noDelay = true
 
         let params = NWParameters(tls: nil, tcp: tcpOptions)
+        params.allowLocalEndpointReuse = true
 
         let port = NWEndpoint.Port(rawValue: UInt16(config.port))!
         listener = try NWListener(using: params, on: port)
 
         listener?.newConnectionHandler = { [weak self] connection in
-            self?.handleNewConnection(connection)
+            guard let self else { return }
+            Task {
+                await self.handleNewConnection(connection)
+            }
         }
 
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+            var resumed = false
             listener?.stateUpdateHandler = { [weak self] state in
                 switch state {
                 case .ready:
-                    self?.listener?.stateUpdateHandler = nil
-                    logger.info("Proxy server listening on port \(self?.config.port ?? 0)")
-                    cont.resume()
+                    self?.isListenerReady = true
+                    if !resumed {
+                        resumed = true
+                        logger.info("Proxy server listening on port \(self?.config.port ?? 0)")
+                        cont.resume()
+                    }
 
                 case .failed(let error):
-                    self?.listener?.stateUpdateHandler = nil
-                    logger.error("Listener failed: \(error)")
-                    cont.resume(throwing: error)
+                    self?.isListenerReady = false
+                    if !resumed {
+                        resumed = true
+                        logger.error("Listener failed: \(error)")
+                        cont.resume(throwing: error)
+                    } else {
+                        logger.error("Listener failed after ready: \(error)")
+                        self?.onListenerFailed?()
+                    }
 
                 case .cancelled:
-                    self?.listener?.stateUpdateHandler = nil
-                    cont.resume(throwing: CancellationError())
+                    self?.isListenerReady = false
+                    if !resumed {
+                        resumed = true
+                        cont.resume(throwing: CancellationError())
+                    }
 
                 default:
                     break
@@ -59,43 +85,34 @@ final class MTProtoProxyServer: @unchecked Sendable {
         Task {
             while listener != nil {
                 try? await Task.sleep(nanoseconds: 2_000_000_000)
-                statsLock.lock()
-                let currentStats = stats
-                statsLock.unlock()
+                let currentStats = await statsActor.getStats()
                 statsCallback?(currentStats)
             }
         }
     }
 
     func stop() {
+        isListenerReady = false
         listener?.cancel()
         listener = nil
     }
 
     // MARK: - Connection handling
 
-    private func handleNewConnection(_ connection: NWConnection) {
+    private func handleNewConnection(_ connection: NWConnection) async {
         connection.start(queue: DispatchQueue.global(qos: .userInitiated))
 
-        statsLock.lock()
-        stats.connectionsTotal += 1
-        stats.connectionsActive += 1
-        statsLock.unlock()
+        await statsActor.update { $0.connectionsTotal += 1 }
+        await statsActor.update { $0.connectionsActive += 1 }
 
-        Task {
-            defer {
-                statsLock.lock()
-                stats.connectionsActive -= 1
-                statsLock.unlock()
-                connection.cancel()
-            }
-
-            do {
-                try await processClient(connection)
-            } catch {
-                logger.debug("Client connection error: \(error)")
-            }
+        do {
+            try await processClient(connection)
+        } catch {
+            logger.debug("Client connection error: \(error)")
         }
+        
+        await statsActor.update { $0.connectionsActive -= 1 }
+        connection.cancel()
     }
 
     private func processClient(_ connection: NWConnection) async throws {
@@ -108,9 +125,7 @@ final class MTProtoProxyServer: @unchecked Sendable {
 
         let secretBytes = hexToBytes(config.secret)
         guard let result = tryHandshake(handshake, secret: secretBytes) else {
-            statsLock.lock()
-            stats.connectionsBad += 1
-            statsLock.unlock()
+            await statsActor.update { $0.connectionsBad += 1 }
             logger.debug("Bad handshake (wrong secret or proto)")
             // Drain remaining data to look like a normal connection
             _ = try? await receiveData(connection, maxLength: 4096)
@@ -167,21 +182,41 @@ final class MTProtoProxyServer: @unchecked Sendable {
             return
         }
 
-        let domains = wsDomains(dc: result.dcId, isMedia: result.isMedia, overrides: config.dcOverrides)
+        // Build the list of (ip, domain, path) tuples to try.
+        // When a Cloudflare Worker domain is configured (recommended for
+        // restricted regions like RF where direct Telegram WS IPs are
+        // RST-injected), we go through the Worker first; otherwise direct.
+        struct WsTarget { let ip: String; let domain: String; let path: String }
+        var targets: [WsTarget] = []
+
+        let workerDomain = config.cfWorkerDomain.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !workerDomain.isEmpty {
+            // CF Worker bridges WS frames to a raw TCP socket to the
+            // requested `dst` IP, port 443. We resolve the worker domain
+            // through DNS by connecting to it by name.
+            targets.append(WsTarget(
+                ip: workerDomain,
+                domain: workerDomain,
+                path: "/apiws?dst=\(targetIP)"
+            ))
+        } else {
+            let domains = wsDomains(dc: result.dcId, isMedia: result.isMedia, overrides: config.dcOverrides)
+            for d in domains {
+                targets.append(WsTarget(ip: targetIP, domain: d, path: "/apiws"))
+            }
+        }
 
         var ws: RawWebSocket? = nil
-        for domain in domains {
-            logger.info("DC\(result.dcId)\(mediaTag) -> wss://\(domain)/apiws via \(targetIP)")
+        for t in targets {
+            logger.info("DC\(result.dcId)\(mediaTag) -> wss://\(t.domain)\(t.path) via \(t.ip)")
             do {
-                ws = try await RawWebSocket.connect(ip: targetIP, domain: domain, timeout: 10)
+                ws = try await RawWebSocket.connect(ip: t.ip, domain: t.domain, path: t.path, timeout: 10)
                 break
             } catch let error as WsHandshakeError where error.isRedirect {
                 logger.warning("DC\(result.dcId)\(mediaTag) got \(error.statusCode) redirect")
                 continue
             } catch {
-                statsLock.lock()
-                stats.wsErrors += 1
-                statsLock.unlock()
+                await statsActor.update { $0.wsErrors += 1 }
                 logger.warning("DC\(result.dcId)\(mediaTag) WS connect failed: \(error)")
             }
         }
@@ -199,9 +234,7 @@ final class MTProtoProxyServer: @unchecked Sendable {
             return
         }
 
-        statsLock.lock()
-        stats.connectionsWS += 1
-        statsLock.unlock()
+        await statsActor.update { $0.connectionsWS += 1 }
 
         // Build splitter
         let splitter = MsgSplitter(relayInit: relayInit, protoInt: result.protoInt)
@@ -229,14 +262,21 @@ final class MTProtoProxyServer: @unchecked Sendable {
         try await withThrowingTaskGroup(of: Void.self) { group in
             // TCP -> WS (client to Telegram)
             group.addTask { [weak self] in
+                guard let self else { return }
                 do {
                     while true {
-                        let chunk = try await self?.receiveData(connection, maxLength: 65536)
-                        guard let chunk, !chunk.isEmpty else { break }
+                        let chunk = try await self.receiveData(connection, maxLength: 65536)
+                        if chunk.isEmpty {
+                            // EOF from client: drain any pending bytes the
+                            // splitter is still holding (one final WS frame).
+                            let tail = splitter.flush()
+                            if let last = tail.first {
+                                try? await ws.send(last)
+                            }
+                            break
+                        }
 
-                        self?.statsLock.lock()
-                        self?.stats.bytesUp += UInt64(chunk.count)
-                        self?.statsLock.unlock()
+                        await self.statsActor.update { $0.bytesUp += UInt64(chunk.count) }
 
                         let plain = cltDecryptor.process(chunk)
                         let encrypted = tgEncryptor.process(plain)
@@ -258,18 +298,17 @@ final class MTProtoProxyServer: @unchecked Sendable {
 
             // WS -> TCP (Telegram to client)
             group.addTask { [weak self] in
+                guard let self else { return }
                 do {
                     while true {
                         guard let data = try await ws.recv() else { break }
 
-                        self?.statsLock.lock()
-                        self?.stats.bytesDown += UInt64(data.count)
-                        self?.statsLock.unlock()
+                        await self.statsActor.update { $0.bytesDown += UInt64(data.count) }
 
                         let plain = tgDecryptor.process(data)
                         let encrypted = cltEncryptor.process(plain)
 
-                        try await self?.sendData(connection, data: encrypted)
+                        try await self.sendData(connection, data: encrypted)
                     }
                 } catch {
                     // Connection closed
@@ -307,24 +346,21 @@ final class MTProtoProxyServer: @unchecked Sendable {
         // Send relay init
         try await sendData(remote, data: Data(relayInit))
 
-        statsLock.lock()
-        stats.connectionsTCPFallback += 1
-        statsLock.unlock()
+        await statsActor.update { $0.connectionsTCPFallback += 1 }
 
         // Bridge TCP <-> TCP with re-encryption
         try await withThrowingTaskGroup(of: Void.self) { group in
             // Client -> Remote
             group.addTask { [weak self] in
+                guard let self else { return }
                 do {
                     while true {
-                        let data = try await self?.receiveData(connection, maxLength: 65536)
-                        guard let data, !data.isEmpty else { break }
-                        self?.statsLock.lock()
-                        self?.stats.bytesUp += UInt64(data.count)
-                        self?.statsLock.unlock()
+                        let data = try await self.receiveData(connection, maxLength: 65536)
+                        guard !data.isEmpty else { break }
+                        await self.statsActor.update { $0.bytesUp += UInt64(data.count) }
                         let plain = cltDecryptor.process(data)
                         let enc = tgEncryptor.process(plain)
-                        try await self?.sendData(remote, data: enc)
+                        try await self.sendData(remote, data: enc)
                     }
                 } catch {}
                 remote.cancel()
@@ -332,16 +368,15 @@ final class MTProtoProxyServer: @unchecked Sendable {
 
             // Remote -> Client
             group.addTask { [weak self] in
+                guard let self else { return }
                 do {
                     while true {
-                        let data = try await self?.receiveData(remote, maxLength: 65536)
-                        guard let data, !data.isEmpty else { break }
-                        self?.statsLock.lock()
-                        self?.stats.bytesDown += UInt64(data.count)
-                        self?.statsLock.unlock()
+                        let data = try await self.receiveData(remote, maxLength: 65536)
+                        guard !data.isEmpty else { break }
+                        await self.statsActor.update { $0.bytesDown += UInt64(data.count) }
                         let plain = tgDecryptor.process(data)
                         let enc = cltEncryptor.process(plain)
-                        try await self?.sendData(connection, data: enc)
+                        try await self.sendData(connection, data: enc)
                     }
                 } catch {}
                 connection.cancel()
@@ -397,9 +432,12 @@ final class MTProtoProxyServer: @unchecked Sendable {
                 } else if let data, !data.isEmpty {
                     cont.resume(returning: data)
                 } else if isComplete {
+                    // Peer closed the connection — return empty Data so the
+                    // caller can break out of its read loop cleanly.
                     cont.resume(returning: Data())
                 } else {
-                    cont.resume(throwing: RawWebSocket.ConnectionError.closed)
+                    // No data, no error, not complete: treat as transient EOF.
+                    cont.resume(returning: Data())
                 }
             }
         }
@@ -431,4 +469,19 @@ func hexToBytes(_ hex: String) -> [UInt8] {
         index = next
     }
     return bytes
+}
+
+// MARK: - Stats Actor
+
+@available(iOS 17.0, *)
+actor StatsActor {
+    private var stats = ProxyStats()
+    
+    func getStats() -> ProxyStats {
+        return stats
+    }
+    
+    func update(_ update: (inout ProxyStats) -> Void) {
+        update(&stats)
+    }
 }

@@ -41,11 +41,26 @@ actor RawWebSocket {
     private func performConnect(ip: String, domain: String, path: String,
                                 timeout: TimeInterval) async throws {
         let tlsOptions = NWProtocolTLS.Options()
-        sec_protocol_options_set_peer_domain(tlsOptions.securityProtocolOptions, domain)
-        // Allow self-signed / mismatched for Telegram's WS endpoints
-        sec_protocol_options_set_verify_block(tlsOptions.securityProtocolOptions, { _, _, completionHandler in
-            completionHandler(true)
-        }, DispatchQueue.global())
+
+        // SNI: must be the WS endpoint hostname, not the IP we connect to.
+        // Telegram's edge routes by SNI; without this the TLS handshake or
+        // the upstream WS routing fails. Python reference does the equivalent
+        // via `server_hostname=domain` in asyncio.open_connection.
+        domain.withCString { cDomain in
+            sec_protocol_options_set_tls_server_name(
+                tlsOptions.securityProtocolOptions, cDomain
+            )
+        }
+
+        // Accept self-signed / mismatched certs (we pin the target by IP and
+        // re-encrypt MTProto end-to-end, so cert chain validity is moot).
+        sec_protocol_options_set_verify_block(
+            tlsOptions.securityProtocolOptions,
+            { _, _, completionHandler in
+                completionHandler(true)
+            },
+            DispatchQueue.global()
+        )
 
         let tcpOptions = NWProtocolTCP.Options()
         tcpOptions.noDelay = true
@@ -77,7 +92,9 @@ actor RawWebSocket {
             conn.start(queue: DispatchQueue.global())
         }
 
-        // Send HTTP upgrade request
+        // Send HTTP upgrade request. Headers match the Python reference
+        // exactly — no Origin / User-Agent, which Telegram's WS endpoint
+        // appears to use as a signal to redirect/reject.
         let wsKeyBytes = secureRandomBytes(16)
         let wsKey = Data(wsKeyBytes).base64EncodedString()
 
@@ -89,8 +106,6 @@ actor RawWebSocket {
             "Sec-WebSocket-Key: \(wsKey)",
             "Sec-WebSocket-Version: 13",
             "Sec-WebSocket-Protocol: binary",
-            "Origin: https://web.telegram.org",
-            "User-Agent: Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
             "",
             ""
         ].joined(separator: "\r\n")
@@ -98,14 +113,40 @@ actor RawWebSocket {
         let requestData = request.data(using: .utf8)!
         try await sendRaw(requestData)
 
-        // Read HTTP response
-        let responseData = try await receiveRaw(maxLength: 4096, timeout: timeout)
-        guard let responseStr = String(data: responseData, encoding: .utf8) else {
+        // Read HTTP response until we have the full header block (\r\n\r\n).
+        // The previous implementation did a single 4 KiB recv which would
+        // silently drop everything past the first TCP segment.
+        let headerEndPattern = Data("\r\n\r\n".utf8)
+        var responseData = Data()
+        while responseData.range(of: headerEndPattern) == nil {
+            let chunk = try await receiveRaw(maxLength: 4096, timeout: timeout)
+            if chunk.isEmpty {
+                conn.cancel()
+                throw WsHandshakeError(statusCode: 0,
+                                        statusLine: "connection closed before headers",
+                                        headers: [:], location: nil)
+            }
+            responseData.append(chunk)
+            if responseData.count > 65536 {
+                conn.cancel()
+                throw WsHandshakeError(statusCode: 0,
+                                        statusLine: "response headers too large",
+                                        headers: [:], location: nil)
+            }
+        }
+
+        let headerEnd = responseData.range(of: headerEndPattern)!
+        let headerBlock = responseData.subdata(in: responseData.startIndex..<headerEnd.lowerBound)
+        let leftover = responseData.suffix(from: headerEnd.upperBound)
+
+        guard let responseStr = String(data: headerBlock, encoding: .utf8) else {
+            conn.cancel()
             throw WsHandshakeError(statusCode: 0, statusLine: "invalid response", headers: [:], location: nil)
         }
 
         let lines = responseStr.components(separatedBy: "\r\n")
         guard !lines.isEmpty else {
+            conn.cancel()
             throw WsHandshakeError(statusCode: 0, statusLine: "empty response", headers: [:], location: nil)
         }
 
@@ -113,12 +154,8 @@ actor RawWebSocket {
         let statusCode = parts.count >= 2 ? Int(parts[1]) ?? 0 : 0
 
         if statusCode == 101 {
-            // Find end of headers, keep any remaining data in buffer
-            if let headerEnd = responseData.range(of: Data("\r\n\r\n".utf8)) {
-                let remaining = responseData.suffix(from: headerEnd.upperBound)
-                if !remaining.isEmpty {
-                    receiveBuffer.append(remaining)
-                }
+            if !leftover.isEmpty {
+                receiveBuffer.append(leftover)
             }
             return
         }
