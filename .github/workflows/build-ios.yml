@@ -46,6 +46,7 @@ jobs:
             TgWsProxy/Sources/RawWebSocket.swift
             TgWsProxy/Sources/MTProtoHandshake.swift
             TgWsProxy/Sources/MTProtoProxyServer.swift
+            TgWsProxy/Sources/BackgroundKeeper.swift
             TgWsProxy/Sources/LiveActivityManager.swift
           )
 
@@ -63,7 +64,7 @@ jobs:
             -framework SwiftUI \
             -framework UIKit \
             -framework Network \
-            -framework NetworkExtension \
+            -framework AVFoundation \
             -framework ActivityKit \
             -framework WidgetKit \
             "${SOURCES[@]}"
