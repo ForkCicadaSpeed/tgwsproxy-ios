@@ -45,6 +45,7 @@ jobs:
             TgWsProxy/Sources/RawWebSocket.swift
             TgWsProxy/Sources/MTProtoHandshake.swift
             TgWsProxy/Sources/MTProtoProxyServer.swift
+            TgWsProxy/Sources/BackgroundKeeper.swift
             TgWsProxy/Sources/LiveActivityManager.swift
           )
 
