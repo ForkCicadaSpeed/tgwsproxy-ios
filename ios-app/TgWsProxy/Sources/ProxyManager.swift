@@ -1,10 +1,11 @@
 import Foundation
+import NetworkExtension
 import Combine
 import os.log
 
 private let logger = Logger(subsystem: "com.tgwsproxy.app", category: "ProxyManager")
 
-// MARK: - Proxy Manager (direct mode with background keep-alive)
+// MARK: - Proxy Manager (VPN-based)
 @MainActor
 @available(iOS 17.0, *)
 final class ProxyManager: ObservableObject {
@@ -13,106 +14,193 @@ final class ProxyManager: ObservableObject {
     @Published var isRunning = false
     @Published var stats = ProxyStats()
     @Published var config = ProxyConfig.load()
+    @Published var vpnStatus: NEVPNStatus = .disconnected
 
-    private var server: MTProtoProxyServer?
-    private var startGeneration = 0
+    private var vpnManager: NETunnelProviderManager?
+    private var statusObserver: NSObjectProtocol?
+    private var statsTimer: Timer?
 
-    private var shouldBeRunning: Bool {
-        get { UserDefaults.standard.bool(forKey: "proxyShouldBeRunning") }
-        set { UserDefaults.standard.set(newValue, forKey: "proxyShouldBeRunning") }
-    }
+    private static let tunnelBundleID = "com.tgwsproxy.app.tunnel"
 
     var tgLink: String {
         "tg://proxy?server=\(config.host)&port=\(config.port)&secret=dd\(config.secret)"
+    }
+
+    init() {
+        loadVPNConfiguration()
+    }
+
+    // MARK: - VPN Configuration
+
+    private func loadVPNConfiguration() {
+        NETunnelProviderManager.loadAllFromPreferences { [weak self] managers, error in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                if let error {
+                    logger.error("Failed to load VPN preferences: \(error.localizedDescription)")
+                }
+                if let existing = managers?.first {
+                    self.vpnManager = existing
+                } else {
+                    self.vpnManager = self.makeVPNManager()
+                }
+                self.observeVPNStatus()
+                self.syncRunningState()
+            }
+        }
+    }
+
+    private func makeVPNManager() -> NETunnelProviderManager {
+        let manager = NETunnelProviderManager()
+        let proto = NETunnelProviderProtocol()
+        proto.providerBundleIdentifier = Self.tunnelBundleID
+        proto.serverAddress = "\(config.host):\(config.port)"
+        manager.protocolConfiguration = proto
+        manager.localizedDescription = "TG WS Proxy"
+        manager.isEnabled = true
+        return manager
     }
 
     // MARK: - Start / Stop
 
     func startProxy() {
         guard !isRunning else { return }
-
         config.save()
-        shouldBeRunning = true
-        startGeneration += 1
-        let gen = startGeneration
+        logger.info("Starting VPN tunnel for proxy on \(self.config.host):\(self.config.port)")
 
-        logger.info("Starting proxy gen=\(gen) on \(self.config.host):\(self.config.port)")
+        guard let manager = vpnManager else {
+            logger.error("VPN manager not loaded yet")
+            return
+        }
 
-        BackgroundKeeper.shared.start()
-        LiveActivityManager.shared.startActivity(
-            host: config.host,
-            port: config.port,
-            secret: config.secret
-        )
+        if let proto = manager.protocolConfiguration as? NETunnelProviderProtocol {
+            proto.serverAddress = "\(config.host):\(config.port)"
+        }
+        manager.isEnabled = true
 
-        let srv = MTProtoProxyServer(config: config, statsCallback: { [weak self] newStats in
-            Task { @MainActor in
-                guard let self, gen == self.startGeneration else { return }
-                self.stats = newStats
-                LiveActivityManager.shared.updateActivity(
-                    connections: newStats.connectionsActive,
-                    totalConnections: newStats.connectionsTotal,
-                    bytesUp: newStats.bytesUp,
-                    bytesDown: newStats.bytesDown
+        manager.saveToPreferences { [weak self] error in
+            if let error {
+                logger.error("Save VPN prefs failed: \(error.localizedDescription)")
+                return
+            }
+            manager.loadFromPreferences { error in
+                if let error {
+                    logger.error("Reload VPN prefs failed: \(error.localizedDescription)")
+                    return
+                }
+                do {
+                    try (manager.connection as? NETunnelProviderSession)?.startTunnel()
+                    logger.info("VPN tunnel start requested")
+                } catch {
+                    logger.error("Start tunnel failed: \(error.localizedDescription)")
+                }
+            }
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                LiveActivityManager.shared.startActivity(
+                    host: self.config.host,
+                    port: self.config.port,
+                    secret: self.config.secret
                 )
-            }
-        }, onListenerFailed: { [weak self] in
-            Task { @MainActor in
-                guard let self, gen == self.startGeneration else { return }
-                logger.warning("Listener failed gen=\(gen), will restart on next foreground")
-                self.server = nil
-                self.isRunning = false
-            }
-        })
-        self.server = srv
-
-        Task {
-            do {
-                try await srv.start()
-                guard gen == self.startGeneration else { return }
-                isRunning = true
-                logger.info("Proxy started successfully gen=\(gen)")
-            } catch {
-                guard gen == self.startGeneration else { return }
-                logger.error("Proxy start failed gen=\(gen): \(error.localizedDescription)")
-                isRunning = false
-                server = nil
             }
         }
     }
 
     func stopProxy() {
-        logger.info("Stopping proxy")
-        shouldBeRunning = false
-        startGeneration += 1
-
-        BackgroundKeeper.shared.stop()
+        logger.info("Stopping VPN tunnel")
+        vpnManager?.connection.stopVPNTunnel()
         LiveActivityManager.shared.stopActivity()
-
-        server = nil
-        isRunning = false
         stats = ProxyStats()
     }
 
     func handleBecameActive() {
-        guard shouldBeRunning else { return }
-
-        BackgroundKeeper.shared.reactivateAudioSession()
-
-        // After iOS freezes the process the NWListener is dead but our
-        // state still says isRunning. Force a clean restart every time.
-        logger.info("Returning to foreground, restarting proxy")
-        startGeneration += 1
-        server = nil
-        isRunning = false
-        startProxy()
+        syncRunningState()
+        if isRunning {
+            fetchStats()
+        }
     }
 
     func saveConfig() {
         config.save()
-        if isRunning || shouldBeRunning {
+        if isRunning {
             stopProxy()
-            startProxy()
+            Task {
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                startProxy()
+            }
+        }
+    }
+
+    // MARK: - VPN Status
+
+    private func observeVPNStatus() {
+        statusObserver = NotificationCenter.default.addObserver(
+            forName: .NEVPNStatusDidChange,
+            object: vpnManager?.connection,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.syncRunningState()
+            }
+        }
+    }
+
+    private func syncRunningState() {
+        let status = vpnManager?.connection.status ?? .disconnected
+        vpnStatus = status
+        let running = (status == .connected)
+        if running != isRunning {
+            isRunning = running
+            if running {
+                startStatsPolling()
+                LiveActivityManager.shared.startActivity(
+                    host: config.host, port: config.port, secret: config.secret
+                )
+            } else {
+                stopStatsPolling()
+                if status == .disconnected || status == .invalid {
+                    LiveActivityManager.shared.stopActivity()
+                }
+            }
+        }
+    }
+
+    // MARK: - Stats IPC
+
+    private func startStatsPolling() {
+        stopStatsPolling()
+        statsTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.fetchStats()
+            }
+        }
+    }
+
+    private func stopStatsPolling() {
+        statsTimer?.invalidate()
+        statsTimer = nil
+    }
+
+    private func fetchStats() {
+        guard let session = vpnManager?.connection as? NETunnelProviderSession,
+              session.status == .connected else { return }
+        do {
+            try session.sendProviderMessage(Data([0x01])) { [weak self] response in
+                guard let data = response,
+                      let decoded = try? JSONDecoder().decode(ProxyStats.self, from: data) else { return }
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    self.stats = decoded
+                    LiveActivityManager.shared.updateActivity(
+                        connections: decoded.connectionsActive,
+                        totalConnections: decoded.connectionsTotal,
+                        bytesUp: decoded.bytesUp,
+                        bytesDown: decoded.bytesDown
+                    )
+                }
+            }
+        } catch {
+            logger.debug("Stats IPC failed: \(error.localizedDescription)")
         }
     }
 }
