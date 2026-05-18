@@ -15,11 +15,13 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         let config = ProxyConfig.load()
         logger.info("Starting tunnel, proxy on \(config.host):\(config.port)")
 
-        let settings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress: "127.0.0.1")
+        let settings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress: "198.18.0.1")
         let ipv4 = NEIPv4Settings(addresses: ["198.18.0.1"], subnetMasks: ["255.255.255.0"])
         ipv4.includedRoutes = []
         ipv4.excludedRoutes = [NEIPv4Route.default()]
         settings.ipv4Settings = ipv4
+        settings.dnsSettings = NEDNSSettings(servers: ["8.8.8.8"])
+        settings.mtu = 1500 as NSNumber
 
         setTunnelNetworkSettings(settings) { [weak self] error in
             guard let self else { completionHandler(error); return }
@@ -29,12 +31,16 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                 return
             }
 
+            logger.info("Tunnel network settings applied, marking connected")
+            completionHandler(nil)
+
+            self.startReadingPackets()
+
             let srv = MTProtoProxyServer(config: config, statsCallback: { [weak self] stats in
                 self?.setStats(stats)
             }, onListenerFailed: { [weak self] in
-                logger.error("Listener failed inside tunnel, cancelling")
-                self?.cancelTunnelWithError(NSError(domain: "TgWsProxyTunnel", code: 1,
-                    userInfo: [NSLocalizedDescriptionKey: "Proxy listener failed"]))
+                logger.error("Listener failed inside tunnel, restarting proxy")
+                self?.restartProxy()
             })
             self.server = srv
 
@@ -42,10 +48,8 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                 do {
                     try await srv.start()
                     logger.info("Proxy server started successfully in tunnel")
-                    completionHandler(nil)
                 } catch {
                     logger.error("Proxy server start failed: \(error.localizedDescription)")
-                    completionHandler(error)
                 }
             }
         }
@@ -62,6 +66,33 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         let stats = getStats()
         let response = try? JSONEncoder().encode(stats)
         completionHandler?(response)
+    }
+
+    private func startReadingPackets() {
+        packetFlow.readPackets { [weak self] packets, protocols in
+            self?.startReadingPackets()
+        }
+    }
+
+    private func restartProxy() {
+        server?.stop()
+        server = nil
+        let config = ProxyConfig.load()
+        let srv = MTProtoProxyServer(config: config, statsCallback: { [weak self] stats in
+            self?.setStats(stats)
+        }, onListenerFailed: { [weak self] in
+            logger.error("Listener failed again, restarting")
+            self?.restartProxy()
+        })
+        self.server = srv
+        Task {
+            do {
+                try await srv.start()
+                logger.info("Proxy server restarted successfully")
+            } catch {
+                logger.error("Proxy restart failed: \(error.localizedDescription)")
+            }
+        }
     }
 
     private func setStats(_ stats: ProxyStats) {
